@@ -1,0 +1,10 @@
+[package]
+name = "focusgrow-gfx"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+windows.workspace = true
+windows-numerics.workspace = true
+

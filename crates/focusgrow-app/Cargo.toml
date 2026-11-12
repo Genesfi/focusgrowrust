@@ -1,0 +1,22 @@
+[package]
+name = "focusgrow-app"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[[bin]]
+name = "FocusGrow"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+focusgrow-core = { path = "../focusgrow-core" }
+focusgrow-gfx = { path = "../focusgrow-gfx" }
+focusgrow-audio = { path = "../focusgrow-audio" }
+serde.workspace = true
+serde_json.workspace = true
+tungstenite.workspace = true
+windows.workspace = true
+windows-numerics.workspace = true
+

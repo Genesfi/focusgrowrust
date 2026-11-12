@@ -1,0 +1,11 @@
+[package]
+name = "focusgrow-audio"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+focusgrow-core = { path = "../focusgrow-core" }
+serde.workspace = true
+windows.workspace = true
+
