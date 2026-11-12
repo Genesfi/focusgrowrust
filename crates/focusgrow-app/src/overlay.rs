@@ -689,7 +689,7 @@ fn overlay_buttons_layout(w: f32, h: f32, snap: &OverlaySnapshot) -> Vec<Overlay
             });
             x += bw + gap;
         }
-    } else if matches!(snap.mode, OverlayMode::FocusBlock | OverlayMode::NeutralOverstayBlock) {
+    } else if matches!(snap.mode, OverlayMode::FocusBlock) {
         let bw = 180.0;
         let bh = 36.0;
         hits.push(OverlayButtonHit {
@@ -740,7 +740,10 @@ fn draw_overlay(
             "#FB923C",
             rgba(254, 215, 170, 0.95),
             "TIME TO RETURN TO FOCUS".to_string(),
-            "Take a breath and switch back to your work applications.\nPress [Esc] to dismiss this overlay.".to_string(),
+            format!(
+                "You have stayed too long in neutral apps ({}).\nSwitch back (Alt+Tab) to your productive workspace to resume.\nRequires at least 5 minutes of sustained focus to unblock.",
+                if snap.target_label.is_empty() { "neutral app" } else { &snap.target_label }
+            ),
         ),
         OverlayMode::FocusBlock | OverlayMode::None => {
             let title = if snap.target_label.is_empty() {
@@ -1038,10 +1041,7 @@ unsafe extern "system" fn overlay_wnd_proc(
                     .lock()
                     .map(|s| s.snapshot.clone())
                     .unwrap_or_default();
-                if matches!(
-                    snap.mode,
-                    OverlayMode::FocusBlock | OverlayMode::NeutralOverstayBlock
-                ) {
+                if matches!(snap.mode, OverlayMode::FocusBlock) {
                     if vk == VK_ESCAPE.0 {
                         if let Ok(mut guard) = pane.shared.lock() {
                             guard.dismissed_domain = snap.target_label;
@@ -1049,10 +1049,7 @@ unsafe extern "system" fn overlay_wnd_proc(
                         push_action(&pane.shared, OverlayAction::Dismissed);
                         return LRESULT(0);
                     }
-                    if snap.mode == OverlayMode::FocusBlock
-                        && snap.passes_available > 0
-                        && !snap.target_label.is_empty()
-                    {
+                    if snap.passes_available > 0 && !snap.target_label.is_empty() {
                         let mins = if vk == VK_1.0 || vk == VK_NUMPAD1.0 {
                             Some(5)
                         } else if vk == VK_2.0 || vk == VK_NUMPAD2.0 {
@@ -1113,5 +1110,17 @@ mod tests {
         };
         assert!(overlay_buttons_layout(1920.0, 1080.0, &snap).is_empty());
         assert!(REST_QUOTES.contains(&snap.quote.as_str()));
+    }
+
+    #[test]
+    fn neutral_overstay_has_no_dismiss_buttons() {
+        let snap = OverlaySnapshot {
+            mode: OverlayMode::NeutralOverstayBlock,
+            timer_text: "20:00".to_string(),
+            target_label: "msedge.exe".to_string(),
+            quote: pick_quote(OverlayMode::NeutralOverstayBlock, 0).to_string(),
+            passes_available: 0,
+        };
+        assert!(overlay_buttons_layout(1920.0, 1080.0, &snap).is_empty());
     }
 }

@@ -273,7 +273,11 @@ pub enum NeutralOverstayEvent {
     None,
     CheckIn1x { app: String, mins: u32 },
     SoftBlock2x { app: String, mins: u32 },
+    Recovered,
 }
+
+/// Continuous productive focus time required to reset neutral app overstay/softblock (5 minutes).
+pub const NEUTRAL_PRODUCTIVE_RESET_SECS: u32 = 5 * 60;
 
 /// Tracks continuous neutral-app usage during active Productive Focus sessions only.
 /// Fires a 1x check-in reminder at `neutral_overstay_mins` and escalates to a 2x
@@ -343,9 +347,13 @@ impl NeutralOverstayTracker {
 
         match config.app_category(clean) {
             "productive" => {
+                let was_softblocked = self.softblock_active;
                 self.continuous_productive_sec = self.continuous_productive_sec.saturating_add(1);
-                if self.continuous_productive_sec >= 60 {
+                if self.continuous_productive_sec >= NEUTRAL_PRODUCTIVE_RESET_SECS {
                     self.reset();
+                    if was_softblocked {
+                        return NeutralOverstayEvent::Recovered;
+                    }
                 }
                 NeutralOverstayEvent::None
             }
@@ -488,16 +496,34 @@ mod tests {
         assert!(tracker.softblock_active);
         assert!(tracker.should_show_overlay(true, &cfg, "msedge.exe"));
 
-        // Switching briefly (<60s) to a productive app hides overlay temporarily
+        // Switching briefly (<300s / 5m) to a productive app hides overlay temporarily
         assert!(!tracker.should_show_overlay(true, &cfg, "Code.exe"));
-        for _ in 0..59 {
-            tracker.tick_one_second(true, &cfg, "Code.exe");
+        for _ in 0..299 {
+            assert_eq!(
+                tracker.tick_one_second(true, &cfg, "Code.exe"),
+                NeutralOverstayEvent::None
+            );
         }
         assert!(tracker.softblock_active);
+        // Returning to neutral app before completing 5m productive work re-shows overlay immediately
         assert!(tracker.should_show_overlay(true, &cfg, "msedge.exe"));
+        // Neutral tick resets productive streak
+        assert_eq!(
+            tracker.tick_one_second(true, &cfg, "msedge.exe"),
+            NeutralOverstayEvent::None
+        );
 
-        // Completing 60 continuous seconds on a productive app resets streak & softblock
-        tracker.tick_one_second(true, &cfg, "Code.exe");
+        // Completing 5 continuous minutes (300s) on a productive app clears the block and fires Recovered
+        for _ in 0..299 {
+            assert_eq!(
+                tracker.tick_one_second(true, &cfg, "Code.exe"),
+                NeutralOverstayEvent::None
+            );
+        }
+        assert_eq!(
+            tracker.tick_one_second(true, &cfg, "Code.exe"),
+            NeutralOverstayEvent::Recovered
+        );
         assert!(!tracker.softblock_active);
         assert!(!tracker.should_show_overlay(true, &cfg, "msedge.exe"));
 

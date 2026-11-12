@@ -224,6 +224,9 @@ struct AppState {
     show_prayer_modal: bool,
     prayer_search_query: String,
     prayer_search_focused: bool,
+    site_input_query: String,
+    site_input_focused: bool,
+    site_scroll: usize,
     prayer_online_results: Option<Vec<CityEntry>>,
     prayer_search_gen: u64,
     prayer_loc_busy: bool,
@@ -909,9 +912,6 @@ impl AppState {
                     if self.blocked_app_active.take().is_some() {
                         self.dismissed_blocked_hwnd = self.active_app.as_ref().map(|a| a.hwnd_raw);
                     }
-                    if self.neutral_overstay.softblock_active {
-                        self.neutral_overstay.dismiss_softblock();
-                    }
                     changed = true;
                 }
                 OverlayAction::GrantPass { domain, minutes } => {
@@ -1443,6 +1443,20 @@ impl AppState {
                     }
                     redraw = true;
                 }
+                NeutralOverstayEvent::Recovered => {
+                    self.status_hint = Some("Focus restored! 5m sustained work completed.".to_string());
+                    self.notify_windows(
+                        "Focus Restored",
+                        "Great job! 5 minutes of sustained focus completed. Neutral app access restored.",
+                    );
+                    if self.config.notifications_enabled {
+                        self.audio.play_notification(
+                            &self.config.focus_sound,
+                            self.config.custom_focus_audio_path.as_deref(),
+                        );
+                    }
+                    redraw = true;
+                }
                 NeutralOverstayEvent::None => {}
             }
 
@@ -1779,7 +1793,26 @@ impl AppState {
         }
         items
     }
+}
 
+fn sanitize_domain(raw: &str) -> String {
+    let mut s = raw.trim().to_lowercase();
+    if let Some(pos) = s.find("://") {
+        s = s[pos + 3..].to_string();
+    }
+    if let Some(stripped) = s.strip_prefix("www.") {
+        s = stripped.to_string();
+    }
+    if let Some(pos) = s.find('/') {
+        s = s[..pos].to_string();
+    }
+    if let Some(pos) = s.find(':') {
+        s = s[..pos].to_string();
+    }
+    s.trim().to_string()
+}
+
+impl AppState {
     fn site_entries(&self) -> Vec<String> {
         let mut entries: Vec<String> = COMMON_SITE_PRESETS.iter().map(|s| (*s).to_string()).collect();
         for s in &self.config.restricted_sites {
@@ -1788,6 +1821,26 @@ impl AppState {
             }
         }
         entries
+    }
+
+    fn add_restricted_site(&mut self, raw: &str) {
+        let domain = sanitize_domain(raw);
+        if domain.is_empty() || !domain.contains('.') {
+            self.status_hint = Some("Please enter a valid domain (e.g. netflix.com)".to_string());
+            return;
+        }
+        if self.config.restricted_sites.iter().any(|d| d.eq_ignore_ascii_case(&domain)) {
+            self.status_hint = Some(format!("{domain} is already in restricted sites"));
+            return;
+        }
+        self.config.restricted_sites.push(domain.clone());
+        self.guard.sync_from_config(&self.config);
+        let _ = self.config.save();
+        self.sync_bridge_snapshot();
+        self.status_hint = Some(format!("Restricted {domain} (synced to extension)"));
+        self.site_input_query.clear();
+        self.site_input_focused = false;
+        self.request_redraw();
     }
 
     fn layout_query(&self, w: f32, h: f32) -> LayoutQuery<'_> {
@@ -1814,7 +1867,8 @@ impl AppState {
             config: &self.config,
             guard_tab: self.guard_tab,
             visible_app_rows,
-            site_rows: self.site_entries().len().min(8),
+            site_rows: self.site_entries().len(),
+            site_scroll: self.site_scroll,
             settings_tab: self.settings_tab,
             settings_scroll: self.settings_scroll,
             show_ambient_mixer: self.show_ambient_mixer,
@@ -2003,6 +2057,9 @@ impl AppState {
             active_exe,
             active_domain: &self.active_domain,
             active_pass_count,
+            site_input_focused: self.site_input_focused,
+            site_input_query: &self.site_input_query,
+            site_scroll: self.site_scroll,
             block_countdown_sec: self.block_countdown.map(|(_, s)| s),
             is_auto_paused: self.is_auto_paused,
             completed_spin_deg,
@@ -2461,6 +2518,9 @@ impl AppState {
         let now = Instant::now();
         if id != ControlId::BtnAppSearchBox && self.search_focused {
             self.search_focused = false;
+        }
+        if id != ControlId::BtnSiteSearchBox && id != ControlId::BtnSiteAdd && id != ControlId::BtnSiteClear && self.site_input_focused {
+            self.site_input_focused = false;
         }
         let target_num = match id {
             ControlId::InputTotalMins => Some(NumericEditField::TotalMins),
@@ -3011,15 +3071,19 @@ impl AppState {
             ControlId::BtnGuardTabApps => {
                 self.guard_tab = GuardTab::BlockedApps;
                 self.app_scroll = 0;
+                self.site_input_focused = false;
                 self.refresh_running_apps();
                 self.request_redraw();
             }
             ControlId::BtnGuardTabSites => {
                 self.guard_tab = GuardTab::RestrictedSites;
+                self.site_scroll = 0;
+                self.site_input_focused = false;
                 self.request_redraw();
             }
             ControlId::BtnGuardTabPrayer => {
                 self.guard_tab = GuardTab::PrayerTimes;
+                self.site_input_focused = false;
                 self.refresh_prayer_schedule();
                 self.request_redraw();
             }
@@ -3742,6 +3806,30 @@ impl AppState {
                     self.request_redraw();
                 }
             }
+            ControlId::BtnSiteSearchBox => {
+                self.site_input_focused = true;
+                self.request_redraw();
+            }
+            ControlId::BtnSiteClear => {
+                self.site_input_query.clear();
+                self.request_redraw();
+            }
+            ControlId::BtnSiteAdd => {
+                let q = self.site_input_query.clone();
+                self.add_restricted_site(&q);
+            }
+            ControlId::SiteCustomDelete(idx) => {
+                let entries = self.site_entries();
+                if let Some(domain) = entries.get(idx) {
+                    let d_clean = domain.clone();
+                    self.config.restricted_sites.retain(|s| !s.eq_ignore_ascii_case(&d_clean));
+                    self.guard.sync_from_config(&self.config);
+                    let _ = self.config.save();
+                    self.sync_bridge_snapshot();
+                    self.status_hint = Some(format!("Removed {d_clean}"));
+                    self.request_redraw();
+                }
+            }
             ControlId::SitePresetToggle(idx) => {
                 let entries = self.site_entries();
                 if let Some(domain) = entries.get(idx) {
@@ -4198,6 +4286,9 @@ fn run_app() -> Result<()> {
         show_prayer_modal: false,
         prayer_search_query: String::new(),
         prayer_search_focused: false,
+        site_input_query: String::new(),
+        site_input_focused: false,
+        site_scroll: 0,
         prayer_online_results: None,
         prayer_search_gen: 0,
         prayer_loc_busy: false,
@@ -4547,6 +4638,10 @@ unsafe extern "system" fn wnd_proc(
                         state.search_focused = false;
                         state.app_scroll = 0;
                         state.request_redraw();
+                    } else if state.site_input_focused || !state.site_input_query.is_empty() {
+                        state.site_input_query.clear();
+                        state.site_input_focused = false;
+                        state.request_redraw();
                     }
                 } else if state.show_prayer_modal && state.prayer_search_focused {
                     if code == 0x0D {
@@ -4577,6 +4672,24 @@ unsafe extern "system" fn wnd_proc(
                     } else if !c.is_control() && state.search_query.chars().count() < 48 {
                         state.search_query.push(c);
                         state.app_scroll = 0;
+                        state.request_redraw();
+                    }
+                } else if !state.config.pip_mode
+                    && state.settings_tab.is_none()
+                    && !state.show_stats_modal
+                    && !state.show_goal_modal
+                    && !state.show_prayer_modal
+                    && state.guard_tab == GuardTab::RestrictedSites
+                    && state.site_input_focused
+                {
+                    if code == 0x0D {
+                        let q = state.site_input_query.clone();
+                        state.add_restricted_site(&q);
+                    } else if code == 0x08 {
+                        state.site_input_query.pop();
+                        state.request_redraw();
+                    } else if !c.is_control() && state.site_input_query.chars().count() < 64 {
+                        state.site_input_query.push(c);
                         state.request_redraw();
                     }
                 }
@@ -4618,6 +4731,18 @@ unsafe extern "system" fn wnd_proc(
                         state.app_scroll = state.app_scroll.saturating_sub(1);
                     }
                     if state.app_scroll != prev {
+                        state.request_redraw();
+                    }
+                } else if state.guard_tab == GuardTab::RestrictedSites {
+                    let total = state.site_entries().len();
+                    let max_scroll = (total / 2).saturating_sub(3);
+                    let prev = state.site_scroll;
+                    if delta < 0 {
+                        state.site_scroll = (state.site_scroll + 1).min(max_scroll);
+                    } else if delta > 0 {
+                        state.site_scroll = state.site_scroll.saturating_sub(1);
+                    }
+                    if state.site_scroll != prev {
                         state.request_redraw();
                     }
                 }

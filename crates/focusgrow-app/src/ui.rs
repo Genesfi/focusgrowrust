@@ -317,6 +317,10 @@ pub enum ControlId {
     BtnFilterAccessible,
     GuardAppToggle(usize),
     SitePresetToggle(usize),
+    SiteCustomDelete(usize),
+    BtnSiteSearchBox,
+    BtnSiteAdd,
+    BtnSiteClear,
     BtnSettingsTab(SettingsTab),
     BtnCloseModal,
     ModalBackdrop,
@@ -538,6 +542,9 @@ pub struct RenderView<'a> {
     pub active_exe: &'a str,
     pub active_domain: &'a str,
     pub active_pass_count: usize,
+    pub site_input_focused: bool,
+    pub site_input_query: &'a str,
+    pub site_scroll: usize,
     pub block_countdown_sec: Option<u8>,
     pub is_auto_paused: bool,
     pub completed_spin_deg: f32,
@@ -551,6 +558,7 @@ pub struct LayoutQuery<'a> {
     pub guard_tab: GuardTab,
     pub visible_app_rows: usize,
     pub site_rows: usize,
+    pub site_scroll: usize,
     pub settings_tab: Option<SettingsTab>,
     pub settings_scroll: f32,
     pub show_ambient_mixer: bool,
@@ -1120,7 +1128,7 @@ fn compute_dashboard_layout(q: &LayoutQuery<'_>) -> UiLayout {
             guard_list_rect = push_blocked_apps_hits(content_rect, q.visible_app_rows, &mut hits);
         }
         GuardTab::RestrictedSites => {
-            push_restricted_sites_hits(content_rect, q.site_rows, &mut hits);
+            push_restricted_sites_hits(content_rect, q.site_rows, q.site_scroll, &mut hits);
         }
         GuardTab::PrayerTimes => {
             push_prayer_tab_hits(content_rect, &mut hits);
@@ -1799,32 +1807,74 @@ pub fn blocked_apps_capacity(win_h: f32) -> usize {
     (((list_h + 6.0) / (38.0 + 6.0)).floor() as usize).clamp(3, 18)
 }
 
-fn push_restricted_sites_hits(area: RectF, site_rows: usize, hits: &mut Vec<HitRect>) {
-    let grid_y = area.y + 24.0;
+fn push_restricted_sites_hits(area: RectF, site_rows: usize, site_scroll: usize, hits: &mut Vec<HitRect>) {
+    // 1. Add domain input bar + Add button
+    let bar_y = area.y + 18.0;
+    let bar_h = 28.0;
+    let add_btn_w = 68.0;
+    let input_w = area.w - add_btn_w - 8.0;
+
+    hits.push(HitRect {
+        id: ControlId::BtnSiteSearchBox,
+        rect: RectF { x: area.x, y: bar_y, w: input_w, h: bar_h },
+    });
+    hits.push(HitRect {
+        id: ControlId::BtnSiteClear,
+        rect: RectF { x: area.x + input_w - 24.0, y: bar_y + 4.0, w: 20.0, h: 20.0 },
+    });
+    hits.push(HitRect {
+        id: ControlId::BtnSiteAdd,
+        rect: RectF { x: area.x + input_w + 8.0, y: bar_y, w: add_btn_w, h: bar_h },
+    });
+
+    // 2. Grid of domains
+    let grid_y = bar_y + bar_h + 8.0;
     let col_w = (area.w - 10.0) * 0.5;
-    let row_h = 34.0;
-    let gap = 8.0;
-    for i in 0..site_rows.min(8) {
-        let col = i % 2;
-        let row = i / 2;
-        let ry = grid_y + (row_h + gap) * row as f32;
-        if ry + row_h > area.y + area.h - 36.0 {
+    let row_h = 32.0;
+    let gap = 6.0;
+
+    let bottom_reserved = 34.0;
+    let max_avail_h = area.y + area.h - bottom_reserved - grid_y;
+    let visible_rows = ((max_avail_h / (row_h + gap)).floor() as usize).max(1);
+    let visible_cap = visible_rows * 2;
+
+    let start_idx = (site_scroll * 2).min(site_rows.saturating_sub(visible_cap));
+    for vis_i in 0..visible_cap {
+        let i = start_idx + vis_i;
+        if i >= site_rows {
             break;
         }
+        let col = vis_i % 2;
+        let row = vis_i / 2;
+        let ry = grid_y + (row_h + gap) * row as f32;
+        let rx = area.x + (col_w + 10.0) * col as f32;
+
         hits.push(HitRect {
             id: ControlId::SitePresetToggle(i),
             rect: RectF {
-                x: area.x + (col_w + 10.0) * col as f32,
+                x: rx,
                 y: ry,
                 w: col_w,
                 h: row_h,
             },
         });
+        if i >= COMMON_SITE_PRESETS.len() {
+            hits.push(HitRect {
+                id: ControlId::SiteCustomDelete(i),
+                rect: RectF {
+                    x: rx + col_w - 62.0,
+                    y: ry + (row_h - 20.0) * 0.5,
+                    w: 20.0,
+                    h: 20.0,
+                },
+            });
+        }
     }
-    let btn_y = area.y + area.h - 32.0;
+
+    let btn_y = area.y + area.h - 30.0;
     hits.push(HitRect {
         id: ControlId::BtnGuardClearPasses,
-        rect: RectF { x: area.x + area.w - 148.0, y: btn_y, w: 148.0, h: 30.0 },
+        rect: RectF { x: area.x + area.w - 148.0, y: btn_y, w: 148.0, h: 28.0 },
     });
 }
 
@@ -1896,6 +1946,7 @@ pub fn render_ui(
         guard_tab: view.guard_tab,
         visible_app_rows: view.running_apps.len(),
         site_rows,
+        site_scroll: view.site_scroll,
         settings_tab: view.settings_tab,
         settings_scroll: view.settings_scroll,
         show_ambient_mixer: view.show_ambient_mixer,
@@ -1946,14 +1997,18 @@ fn render_pip_ui(
     draw_backdrop_media(dc, factory, card, layout.card_radius, layout, view, true)?;
 
     // Compact header matching WebView2 PiP: "Focus period (X/Y)" + 3 icons (Style, Expand, Close)
-    let header_title = match view.timer.phase() {
-        SessionPhase::Idle => "FocusGrow".to_string(),
-        SessionPhase::Focusing => {
-            let prefix = if view.config.is_health_mode { "Active" } else { "Focus period" };
-            format!("{prefix} ({}/{})", view.timer.current_period(), view.timer.total_periods())
-        }
-        SessionPhase::Resting => {
-            format!("Break ({}/{})", view.timer.current_period(), view.timer.total_periods())
+    let header_title = if view.timer.is_paused() {
+        "Paused".to_string()
+    } else {
+        match view.timer.phase() {
+            SessionPhase::Idle => "FocusGrow".to_string(),
+            SessionPhase::Focusing => {
+                let prefix = if view.config.is_health_mode { "Active" } else { "Focus period" };
+                format!("{prefix} ({}/{})", view.timer.current_period(), view.timer.total_periods())
+            }
+            SessionPhase::Resting => {
+                format!("Break ({}/{})", view.timer.current_period(), view.timer.total_periods())
+            }
         }
     };
     let header_size = if card.w < 215.0 { 9.5 } else { 10.6 };
@@ -2180,10 +2235,14 @@ fn render_pip_capsule_ui(
         w: timer_w,
         h: capsule.h - 8.0,
     };
-    let phase_color = match view.timer.phase() {
-        SessionPhase::Focusing => rgba(52, 211, 153, 0.98),
-        SessionPhase::Resting => rgba(251, 146, 60, 0.98),
-        SessionPhase::Idle => rgba(156, 163, 175, 0.80),
+    let phase_color = if view.timer.is_paused() {
+        rgba(234, 179, 8, 0.98)
+    } else {
+        match view.timer.phase() {
+            SessionPhase::Focusing => rgba(52, 211, 153, 0.98),
+            SessionPhase::Resting => rgba(251, 146, 60, 0.98),
+            SessionPhase::Idle => rgba(156, 163, 175, 0.80),
+        }
     };
     let phase_brush = unsafe { dc.CreateSolidColorBrush(&phase_color, None) }?;
     unsafe {
@@ -2240,10 +2299,14 @@ fn render_pip_capsule_ui(
                 view.marquee_offset,
             )?;
         } else {
-            let phase_label = match view.timer.phase() {
-                SessionPhase::Idle => "FocusGrow",
-                SessionPhase::Focusing => "Focus Session",
-                SessionPhase::Resting => "Rest & Relax",
+            let phase_label = if view.timer.is_paused() {
+                "Paused"
+            } else {
+                match view.timer.phase() {
+                    SessionPhase::Idle => "FocusGrow",
+                    SessionPhase::Focusing => "Focus Session",
+                    SessionPhase::Resting => "Rest & Relax",
+                }
             };
             draw_text_shadow_nowrap(
                 dc,
@@ -3426,23 +3489,99 @@ fn draw_restricted_sites_tab(
     view: &RenderView<'_>,
 ) -> Result<()> {
     let sub_line = if view.active_domain.is_empty() {
-        "Websites checked below are blocked via the FocusGrow browser extension (:8766).".to_string()
+        "Websites checked below are synced to the FocusGrow browser extension (:8766).".to_string()
     } else {
-        format!("Browser tab: {} (passes active: {})", view.active_domain, view.active_pass_count)
+        format!("Browser tab: {} (emergency passes active: {})", view.active_domain, view.active_pass_count)
     };
     draw_text_nowrap(
         dc,
         dwrite,
         &sub_line,
         RectF { x: area.x, y: area.y, w: area.w, h: 16.0 },
-        10.5,
+        10.2,
         DWRITE_FONT_WEIGHT_NORMAL,
         rgba(161, 161, 170, 0.9),
         DWRITE_TEXT_ALIGNMENT_LEADING,
     )?;
 
+    // 1. Add Domain Input Bar + Button
+    let bar_y = area.y + 18.0;
+    let bar_h = 28.0;
+    let add_btn_w = 68.0;
+    let input_w = area.w - add_btn_w - 8.0;
+    let input_r = RectF { x: area.x, y: bar_y, w: input_w, h: bar_h };
+    let add_r = RectF { x: area.x + input_w + 8.0, y: bar_y, w: add_btn_w, h: bar_h };
+
+    let input_border = if view.site_input_focused {
+        hex_color(view.effective_accent, 0.78)
+    } else if view.hovered == Some(ControlId::BtnSiteSearchBox) {
+        rgba(255, 255, 255, 0.16)
+    } else {
+        rgba(255, 255, 255, 0.08)
+    };
+    draw_rounded_card(dc, input_r, 6.0, rgba(22, 22, 25, 0.92), input_border, 1.0)?;
+    draw_vector_icon(dc, None, RectF { x: input_r.x + 8.0, y: input_r.y + 6.0, w: 16.0, h: 16.0 }, VectorIcon::Search, rgba(161, 161, 170, 0.85))?;
+
+    let (label_text, label_col) = if view.site_input_query.is_empty() {
+        (
+            if view.site_input_focused { "Enter domain (e.g. netflix.com, twitch.tv)..." } else { "Add domain to block (e.g. netflix.com, twitch.tv)..." },
+            rgba(135, 135, 146, 0.88),
+        )
+    } else {
+        (view.site_input_query, rgba(244, 244, 250, 0.98))
+    };
+    draw_text_nowrap(
+        dc,
+        dwrite,
+        label_text,
+        RectF { x: input_r.x + 28.0, y: input_r.y, w: (input_r.w - 56.0).max(40.0), h: input_r.h },
+        11.0,
+        DWRITE_FONT_WEIGHT_NORMAL,
+        label_col,
+        DWRITE_TEXT_ALIGNMENT_LEADING,
+    )?;
+
+    if !view.site_input_query.is_empty() {
+        draw_vector_pill(dc, find_hit(layout, ControlId::BtnSiteClear), VectorIcon::Close, view.hovered == Some(ControlId::BtnSiteClear), false, view.effective_accent)?;
+    }
+
+    let add_hovered = view.hovered == Some(ControlId::BtnSiteAdd);
+    draw_rounded_card(
+        dc,
+        add_r,
+        6.0,
+        if add_hovered { hex_color(view.effective_accent, 0.35) } else { hex_color(view.effective_accent, 0.22) },
+        hex_color(view.effective_accent, 0.65),
+        1.0,
+    )?;
+    draw_text_nowrap(
+        dc,
+        dwrite,
+        "+ Add",
+        add_r,
+        11.2,
+        DWRITE_FONT_WEIGHT_SEMI_BOLD,
+        rgba(255, 255, 255, 0.98),
+        DWRITE_TEXT_ALIGNMENT_CENTER,
+    )?;
+
+    // 2. Grid of site cards
     let entries = build_site_entries(view);
-    for (i, domain) in entries.iter().take(8).enumerate() {
+    let grid_y = bar_y + bar_h + 8.0;
+    let row_h = 32.0;
+    let gap = 6.0;
+    let bottom_reserved = 34.0;
+    let max_avail_h = area.y + area.h - bottom_reserved - grid_y;
+    let visible_rows = ((max_avail_h / (row_h + gap)).floor() as usize).max(1);
+    let visible_cap = visible_rows * 2;
+    let start_idx = (view.site_scroll * 2).min(entries.len().saturating_sub(visible_cap));
+
+    for vis_i in 0..visible_cap {
+        let i = start_idx + vis_i;
+        if i >= entries.len() {
+            break;
+        }
+        let domain = &entries[i];
         let Some(r) = find_hit(layout, ControlId::SitePresetToggle(i)) else {
             continue;
         };
@@ -3450,24 +3589,66 @@ fn draw_restricted_sites_tab(
         let hovered = view.hovered == Some(ControlId::SitePresetToggle(i));
         let bg = if active { hex_color(view.effective_accent, 0.14) } else if hovered { rgba(55, 55, 64, 0.9) } else { rgba(32, 32, 37, 0.9) };
         let border = if active { hex_color(view.effective_accent, 0.65) } else { rgba(255, 255, 255, 0.07) };
-        draw_rounded_card(dc, r, 8.0, bg, border, 1.0)?;
+        draw_rounded_card(dc, r, 7.0, bg, border, 1.0)?;
+
+        let is_custom = i >= COMMON_SITE_PRESETS.len();
+        let text_max_w = if is_custom { r.w - 78.0 } else { r.w - 52.0 };
         draw_text_nowrap(
             dc,
             dwrite,
             domain,
-            RectF { x: r.x + 10.0, y: r.y, w: (r.w - 52.0).max(40.0), h: r.h },
-            11.5,
+            RectF { x: r.x + 10.0, y: r.y, w: text_max_w.max(30.0), h: r.h },
+            11.2,
             DWRITE_FONT_WEIGHT_SEMI_BOLD,
             rgba(238, 238, 246, 0.95),
             DWRITE_TEXT_ALIGNMENT_LEADING,
         )?;
+
+        if is_custom {
+            if let Some(del_r) = find_hit(layout, ControlId::SiteCustomDelete(i)) {
+                let del_hovered = view.hovered == Some(ControlId::SiteCustomDelete(i));
+                draw_rounded_card(
+                    dc,
+                    del_r,
+                    4.0,
+                    if del_hovered { rgba(239, 68, 68, 0.3) } else { rgba(255, 255, 255, 0.05) },
+                    if del_hovered { rgba(239, 68, 68, 0.6) } else { rgba(255, 255, 255, 0.08) },
+                    1.0,
+                )?;
+                draw_text_nowrap(
+                    dc,
+                    dwrite,
+                    "✕",
+                    del_r,
+                    9.5,
+                    DWRITE_FONT_WEIGHT_BOLD,
+                    if del_hovered { rgba(248, 113, 113, 0.98) } else { rgba(161, 161, 170, 0.8) },
+                    DWRITE_TEXT_ALIGNMENT_CENTER,
+                )?;
+            }
+        }
+
         draw_switch_pill(
             dc,
-            RectF { x: r.x + r.w - 42.0, y: r.y + (r.h - 18.0) * 0.5, w: 32.0, h: 18.0 },
+            RectF { x: r.x + r.w - 38.0, y: r.y + (r.h - 16.0) * 0.5, w: 28.0, h: 16.0 },
             active,
             view.effective_accent,
         )?;
     }
+
+    // 3. Bottom info & Clear Passes
+    let active_count = view.config.restricted_sites.len();
+    let info_text = format!("{active_count} domain{} restricted (synced to extension)", if active_count == 1 { "" } else { "s" });
+    draw_text_nowrap(
+        dc,
+        dwrite,
+        &info_text,
+        RectF { x: area.x, y: area.y + area.h - 26.0, w: (area.w - 160.0).max(60.0), h: 20.0 },
+        10.2,
+        DWRITE_FONT_WEIGHT_MEDIUM,
+        rgba(156, 163, 175, 0.9),
+        DWRITE_TEXT_ALIGNMENT_LEADING,
+    )?;
 
     draw_subtle_button(
         dc,
@@ -3476,6 +3657,7 @@ fn draw_restricted_sites_tab(
         &format!("Clear Passes ({})", view.active_pass_count),
         view.hovered == Some(ControlId::BtnGuardClearPasses),
     )?;
+
     Ok(())
 }
 
@@ -9488,6 +9670,7 @@ mod tests {
             guard_tab: GuardTab::BlockedApps,
             visible_app_rows: 0,
             site_rows: COMMON_SITE_PRESETS.len(),
+            site_scroll: 0,
             settings_tab: None,
             settings_scroll: 0.0,
             show_ambient_mixer: false,
