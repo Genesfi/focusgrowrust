@@ -1,4 +1,6 @@
 /target/
+/bin/
+/dist/
 *.pdb
 *.log
 *.exe
@@ -18,5 +20,8 @@ Thumbs.db
 ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
+
+# Scratch & Temporary
+scratch/
 
 

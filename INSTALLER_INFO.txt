@@ -1,0 +1,58 @@
+========================================================================
+               FOCUSGROW - INSTALLATION & SETUP GUIDE
+               FOCUSGROW - PANDUAN INSTALASI & SETUP
+========================================================================
+
+Thank you for choosing FocusGrow!
+A lightweight, high-performance native Windows productivity suite built with
+Rust & DirectX/Direct2D featuring Smart Focus Timers, Dynamic Capsule PiP,
+Application & Website Guard, Offline Soundscape Mixer, and Prayer Times.
+
+Terima kasih telah memilih FocusGrow!
+Aplikasi produktivitas berkecepatan tinggi untuk Windows (dibangun dengan Rust
+& DirectX) dengan fitur Smart Focus Timer, Floating Capsule PiP, Pemblokir
+Aplikasi & Website, Offline Audio Mixer, serta Pengingat Waktu Sholat.
+
+------------------------------------------------------------------------
+[1] 🌐 FOCUSGROW BROWSER EXTENSION (RESTRICTED SITES GUARD):
+------------------------------------------------------------------------
+To block distracting websites (YouTube, Reddit, Instagram, Twitter, etc.)
+directly inside your browser during Focus sessions and use Emergency Passes:
+
+1. Open your browser's Extension Manager:
+   - Google Chrome : chrome://extensions
+   - Microsoft Edge: edge://extensions
+   - Brave Browser : brave://extensions
+
+2. Toggle ON "Developer mode" in the top-right corner.
+
+3. Click "Load unpacked" and select the "extension-focusgrow" folder inside
+   the FocusGrow installation directory (or use the shortcut in Start Menu).
+
+4. FocusGrow will automatically sync your restricted websites in real time!
+
+------------------------------------------------------------------------
+[2] 🎵 MUSIC & MEDIA SYNC (SPOTIFY & YOUTUBE MUSIC):
+------------------------------------------------------------------------
+FocusGrow supports real-time media sync with spinning vinyl disc, live album
+accent themes, and playback controls:
+
+A. Spotify & Desktop Players (Native - Zero Setup):
+   - Just open Spotify Desktop or any Windows media player.
+   - FocusGrow automatically detects song titles, artist, and playback status!
+
+B. YouTube Music & Browser Extensions (Embedded Server :8765):
+   - FocusGrow natively includes its own embedded WebSocket server on :8765.
+   - No separate server process (YTMPX) is needed!
+   - Simply load the "extension-ytmpx" folder into your browser via
+     "Load unpacked" in chrome://extensions.
+   - You can also toggle Media Sync on/off anytime in FocusGrow Settings.
+
+------------------------------------------------------------------------
+[3] ⚡ STANDALONE USAGE:
+------------------------------------------------------------------------
+FocusGrow works 100% out of the box for focus timers, app blocking, audio
+soundscapes, and prayer times even without browser extensions installed.
+
+========================================================================
+

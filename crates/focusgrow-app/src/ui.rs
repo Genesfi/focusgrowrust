@@ -346,6 +346,8 @@ pub enum ControlId {
     AccentPreset(usize),
     BtnToggleDynamicAlbum,
     BtnToggleComplementary,
+    BtnToggleMediaSync,
+    BtnToggleSpotifySync,
     BtnTogglePeekingVinyl,
     BtnToggleVinylSpindle,
     BtnToggleHideTaskbarInPip,
@@ -589,7 +591,7 @@ fn compute_pip_capsule_layout(
     w: f32,
     _h: f32,
     _config: &AppConfig,
-    _has_track: bool,
+    has_track: bool,
     _phase: SessionPhase,
 ) -> UiLayout {
     let mut hits = Vec::new();
@@ -646,39 +648,41 @@ fn compute_pip_capsule_layout(
         rect: RectF { x: pp_x, y: btn_y, w: btn_s, h: btn_s },
     });
 
-    // Floating Glass Under-Bar for YouTube Music Controls
-    let under_h = 24.0;
-    let under_y = capsule_rect.y + capsule_h + 3.0;
-    let under_w = if is_compact {
-        124.0f32.min(capsule_w - 6.0).max(60.0)
-    } else {
-        136.0f32.min(capsule_w - 12.0).max(60.0)
-    };
-    let under_x = capsule_rect.x + (capsule_w - under_w) * 0.5;
-    let btn_under_y = under_y + (under_h - 20.0) * 0.5;
-    let slot_w = under_w / 4.0;
+    // Floating Glass Under-Bar for Music Controls (only visible when an active track is detected)
+    if has_track {
+        let under_h = 24.0;
+        let under_y = capsule_rect.y + capsule_h + 3.0;
+        let under_w = if is_compact {
+            124.0f32.min(capsule_w - 6.0).max(60.0)
+        } else {
+            136.0f32.min(capsule_w - 12.0).max(60.0)
+        };
+        let under_x = capsule_rect.x + (capsule_w - under_w) * 0.5;
+        let btn_under_y = under_y + (under_h - 20.0) * 0.5;
+        let slot_w = under_w / 4.0;
 
-    let b_prev_w = if is_compact { 24.0 } else { 26.0 };
-    let b_pp_w = if is_compact { 28.0 } else { 32.0 };
-    let b_next_w = if is_compact { 24.0 } else { 26.0 };
-    let b_win_w = if is_compact { 24.0 } else { 28.0 };
+        let b_prev_w = if is_compact { 24.0 } else { 26.0 };
+        let b_pp_w = if is_compact { 28.0 } else { 32.0 };
+        let b_next_w = if is_compact { 24.0 } else { 26.0 };
+        let b_win_w = if is_compact { 24.0 } else { 28.0 };
 
-    hits.push(HitRect {
-        id: ControlId::BtnMediaPrev,
-        rect: RectF { x: under_x + (slot_w - b_prev_w) * 0.5, y: btn_under_y, w: b_prev_w, h: 20.0 },
-    });
-    hits.push(HitRect {
-        id: ControlId::BtnMediaPlayPause,
-        rect: RectF { x: under_x + slot_w + (slot_w - b_pp_w) * 0.5, y: btn_under_y, w: b_pp_w, h: 20.0 },
-    });
-    hits.push(HitRect {
-        id: ControlId::BtnMediaNext,
-        rect: RectF { x: under_x + slot_w * 2.0 + (slot_w - b_next_w) * 0.5, y: btn_under_y, w: b_next_w, h: 20.0 },
-    });
-    hits.push(HitRect {
-        id: ControlId::BtnMediaToggleWindow,
-        rect: RectF { x: under_x + slot_w * 3.0 + (slot_w - b_win_w) * 0.5, y: btn_under_y, w: b_win_w, h: 20.0 },
-    });
+        hits.push(HitRect {
+            id: ControlId::BtnMediaPrev,
+            rect: RectF { x: under_x + (slot_w - b_prev_w) * 0.5, y: btn_under_y, w: b_prev_w, h: 20.0 },
+        });
+        hits.push(HitRect {
+            id: ControlId::BtnMediaPlayPause,
+            rect: RectF { x: under_x + slot_w + (slot_w - b_pp_w) * 0.5, y: btn_under_y, w: b_pp_w, h: 20.0 },
+        });
+        hits.push(HitRect {
+            id: ControlId::BtnMediaNext,
+            rect: RectF { x: under_x + slot_w * 2.0 + (slot_w - b_next_w) * 0.5, y: btn_under_y, w: b_next_w, h: 20.0 },
+        });
+        hits.push(HitRect {
+            id: ControlId::BtnMediaToggleWindow,
+            rect: RectF { x: under_x + slot_w * 3.0 + (slot_w - b_win_w) * 0.5, y: btn_under_y, w: b_win_w, h: 20.0 },
+        });
+    }
 
     UiLayout {
         card_rect: capsule_rect,
@@ -1447,7 +1451,7 @@ fn appearance_cards(body: RectF, config: &AppConfig, scroll: f32) -> AppearanceC
     let sec1 = RectF { x, y: y1, w, h: sec1_h };
 
     let y2 = y1 + sec1_h + 12.0;
-    let sec2_h = 200.0;
+    let sec2_h = 296.0;
     let sec2 = RectF { x, y: y2, w, h: sec2_h };
 
     let y3 = y2 + sec2_h + 12.0;
@@ -1565,6 +1569,8 @@ fn push_settings_tab_hits(
             }
             push_modal_hit(body, hits, ControlId::BtnToggleDynamicAlbum, RectF { x: p2x, y: sw_y + 44.0, w: p2w, h: 42.0 });
             push_modal_hit(body, hits, ControlId::BtnToggleComplementary, RectF { x: p2x, y: sw_y + 92.0, w: p2w, h: 42.0 });
+            push_modal_hit(body, hits, ControlId::BtnToggleMediaSync, RectF { x: p2x, y: sw_y + 140.0, w: p2w, h: 42.0 });
+            push_modal_hit(body, hits, ControlId::BtnToggleSpotifySync, RectF { x: p2x, y: sw_y + 188.0, w: p2w, h: 42.0 });
 
             // Card 3: Mode-specific Ambient Backdrop (Default Plant | YT Music Vinyl | Custom GIF)
             let p3x = cards.sec3.x + 14.0;
@@ -2367,79 +2373,81 @@ fn render_pip_capsule_ui(
         "#D4D4D8",
     )?;
 
-    // 6. Floating Glass Under-Bar for YouTube Music Controls
-    let under_h = 24.0;
-    let under_y = capsule.y + capsule.h + 3.0;
-    let under_w = 136.0f32.min(capsule.w - 12.0).max(60.0);
-    let under_x = capsule.x + (capsule.w - under_w) * 0.5;
-    let under_rect = RectF {
-        x: under_x,
-        y: under_y,
-        w: under_w,
-        h: under_h,
-    };
+    // 6. Floating Glass Under-Bar for Music Controls (only rendered when an active track is detected)
+    if view.track.is_some() {
+        let under_h = 24.0;
+        let under_y = capsule.y + capsule.h + 3.0;
+        let under_w = 136.0f32.min(capsule.w - 12.0).max(60.0);
+        let under_x = capsule.x + (capsule.w - under_w) * 0.5;
+        let under_rect = RectF {
+            x: under_x,
+            y: under_y,
+            w: under_w,
+            h: under_h,
+        };
 
-    draw_rounded_card(
-        dc,
-        under_rect,
-        under_h * 0.5,
-        rgba(14, 14, 18, 0.82),
-        rgba(255, 255, 255, 0.12),
-        0.8,
-    )?;
+        draw_rounded_card(
+            dc,
+            under_rect,
+            under_h * 0.5,
+            rgba(14, 14, 18, 0.82),
+            rgba(255, 255, 255, 0.12),
+            0.8,
+        )?;
 
-    let btn_bg = rgba(255, 255, 255, 0.08);
-    let btn_border = rgba(255, 255, 255, 0.16);
-    let btn_fg = rgba(255, 255, 255, 0.92);
+        let btn_bg = rgba(255, 255, 255, 0.08);
+        let btn_border = rgba(255, 255, 255, 0.16);
+        let btn_fg = rgba(255, 255, 255, 0.92);
 
-    draw_icon_circle_button(
-        dc,
-        factory,
-        find_hit(layout, ControlId::BtnMediaPrev),
-        VectorIcon::SkipPrev,
-        btn_bg,
-        btn_border,
-        btn_fg,
-        view.hovered == Some(ControlId::BtnMediaPrev),
-    )?;
+        draw_icon_circle_button(
+            dc,
+            factory,
+            find_hit(layout, ControlId::BtnMediaPrev),
+            VectorIcon::SkipPrev,
+            btn_bg,
+            btn_border,
+            btn_fg,
+            view.hovered == Some(ControlId::BtnMediaPrev),
+        )?;
 
-    let pp_icon = if view.playback == PlaybackState::Playing {
-        VectorIcon::PauseBars
-    } else {
-        VectorIcon::PlayTri
-    };
-    draw_icon_circle_button(
-        dc,
-        factory,
-        find_hit(layout, ControlId::BtnMediaPlayPause),
-        pp_icon,
-        hex_color(view.effective_accent, 0.85),
-        rgba(0, 0, 0, 0.0),
-        contrast_fg(view.effective_accent),
-        view.hovered == Some(ControlId::BtnMediaPlayPause),
-    )?;
+        let pp_icon = if view.playback == PlaybackState::Playing {
+            VectorIcon::PauseBars
+        } else {
+            VectorIcon::PlayTri
+        };
+        draw_icon_circle_button(
+            dc,
+            factory,
+            find_hit(layout, ControlId::BtnMediaPlayPause),
+            pp_icon,
+            hex_color(view.effective_accent, 0.85),
+            rgba(0, 0, 0, 0.0),
+            contrast_fg(view.effective_accent),
+            view.hovered == Some(ControlId::BtnMediaPlayPause),
+        )?;
 
-    draw_icon_circle_button(
-        dc,
-        factory,
-        find_hit(layout, ControlId::BtnMediaNext),
-        VectorIcon::SkipNext,
-        btn_bg,
-        btn_border,
-        btn_fg,
-        view.hovered == Some(ControlId::BtnMediaNext),
-    )?;
+        draw_icon_circle_button(
+            dc,
+            factory,
+            find_hit(layout, ControlId::BtnMediaNext),
+            VectorIcon::SkipNext,
+            btn_bg,
+            btn_border,
+            btn_fg,
+            view.hovered == Some(ControlId::BtnMediaNext),
+        )?;
 
-    draw_icon_circle_button(
-        dc,
-        factory,
-        find_hit(layout, ControlId::BtnMediaToggleWindow),
-        VectorIcon::Headphones,
-        btn_bg,
-        btn_border,
-        btn_fg,
-        view.hovered == Some(ControlId::BtnMediaToggleWindow),
-    )?;
+        draw_icon_circle_button(
+            dc,
+            factory,
+            find_hit(layout, ControlId::BtnMediaToggleWindow),
+            VectorIcon::Headphones,
+            btn_bg,
+            btn_border,
+            btn_fg,
+            view.hovered == Some(ControlId::BtnMediaToggleWindow),
+        )?;
+    }
 
     Ok(())
 }
@@ -4075,7 +4083,7 @@ fn draw_settings_appearance(
         dc,
         dwrite,
         RectF { x: p2x, y: sw_y + 44.0, w: p2w, h: 42.0 },
-        "Dynamic YT Music Album Sync",
+        "Dynamic Album Accent Sync",
         Some("Extracts accent palette from album art in real-time"),
         view.config.dynamic_album_enabled,
         view.hovered == Some(ControlId::BtnToggleDynamicAlbum),
@@ -4090,6 +4098,28 @@ fn draw_settings_appearance(
         Some("Generates contrasting gauge & background colors"),
         view.config.use_complementary_color,
         view.hovered == Some(ControlId::BtnToggleComplementary),
+        view.effective_accent,
+    )?;
+    draw_dashed_divider(dc, p2x, sw_y + 137.0, p2w)?;
+    draw_setting_inline_row(
+        dc,
+        dwrite,
+        RectF { x: p2x, y: sw_y + 140.0, w: p2w, h: 42.0 },
+        "Browser Music Sync (:8765)",
+        Some("Runs built-in WebSocket server for YT Music & extensions"),
+        view.config.media_sync_enabled,
+        view.hovered == Some(ControlId::BtnToggleMediaSync),
+        view.effective_accent,
+    )?;
+    draw_dashed_divider(dc, p2x, sw_y + 185.0, p2w)?;
+    draw_setting_inline_row(
+        dc,
+        dwrite,
+        RectF { x: p2x, y: sw_y + 188.0, w: p2w, h: 42.0 },
+        "Spotify & Desktop Media Sync",
+        Some("Syncs desktop Spotify and Windows system media player"),
+        view.config.spotify_sync_enabled,
+        view.hovered == Some(ControlId::BtnToggleSpotifySync),
         view.effective_accent,
     )?;
 
@@ -5045,20 +5075,31 @@ fn draw_settings_mobile(
 
     let ix = body.x + 148.0;
     let iw = (w - 162.0).max(140.0);
-    let conn = if view.ytmpx_connected {
-        "● YTMPX Synced (ws://127.0.0.1:8765)"
+    let (conn, conn_col, conn_bg) = if let Some(ref tr) = view.track {
+        if tr.art_url.starts_with("smtc://") {
+            let label = if tr.source.to_lowercase().contains("spotify-web") {
+                "● Spotify Web Synced"
+            } else if tr.source.to_lowercase().contains("spotify") {
+                "● Spotify Desktop Synced"
+            } else {
+                "● System Media Synced"
+            };
+            (label, rgba(52, 211, 153, 0.98), rgba(16, 185, 129, 0.12))
+        } else {
+            ("● Browser / YT Music Synced (:8765)", rgba(52, 211, 153, 0.98), rgba(16, 185, 129, 0.12))
+        }
+    } else if view.ytmpx_connected {
+        ("● WebSocket Active (:8765)", rgba(52, 211, 153, 0.98), rgba(16, 185, 129, 0.12))
     } else {
-        "○ Waiting for YT Music / YTMPX on :8765"
+        ("○ Waiting for Media (Spotify / YT Music :8765)", rgba(161, 161, 170, 0.88), rgba(48, 48, 56, 0.72))
     };
-    let conn_col = if view.ytmpx_connected { rgba(52, 211, 153, 0.98) } else { rgba(161, 161, 170, 0.88) };
-    let conn_bg = if view.ytmpx_connected { rgba(16, 185, 129, 0.12) } else { rgba(48, 48, 56, 0.72) };
     let conn_pill = RectF { x: ix, y: y0 + 12.0, w: (measure_text_width(dwrite, conn, 10.2, DWRITE_FONT_WEIGHT_SEMI_BOLD) + 18.0).min(iw), h: 20.0 };
     let conn_border = D2D1_COLOR_F { r: conn_col.r, g: conn_col.g, b: conn_col.b, a: 0.35 };
     draw_rounded_card(dc, conn_pill, 10.0, conn_bg, conn_border, 1.0)?;
     draw_text_nowrap(dc, dwrite, conn, conn_pill, 10.2, DWRITE_FONT_WEIGHT_SEMI_BOLD, conn_col, DWRITE_TEXT_ALIGNMENT_CENTER)?;
 
     let title = view.track.map(|t| t.title.as_str()).unwrap_or("No active track detected");
-    let artist = view.track.map(|t| t.artist.as_str()).unwrap_or("Play music in YT Music Desktop to sync vinyl & accent");
+    let artist = view.track.map(|t| t.artist.as_str()).unwrap_or("Play Spotify or YouTube Music to sync vinyl & accent");
     draw_text_nowrap(dc, dwrite, title, RectF { x: ix, y: y0 + 40.0, w: iw, h: 22.0 }, 14.5, DWRITE_FONT_WEIGHT_BOLD, rgba(248, 248, 252, 0.98), DWRITE_TEXT_ALIGNMENT_LEADING)?;
     draw_text_nowrap(dc, dwrite, artist, RectF { x: ix, y: y0 + 64.0, w: iw, h: 18.0 }, 11.2, DWRITE_FONT_WEIGHT_NORMAL, rgba(175, 175, 186, 0.92), DWRITE_TEXT_ALIGNMENT_LEADING)?;
 
@@ -9730,6 +9771,13 @@ mod tests {
         assert!(layout.hit_rects.iter().any(|h| h.id == ControlId::BtnMediaPlayPause));
         assert!(layout.hit_rects.iter().any(|h| h.id == ControlId::BtnMediaNext));
         assert!(layout.hit_rects.iter().any(|h| h.id == ControlId::DragBar));
+
+        // When no track is active, playback controls must be hidden
+        q.has_track = false;
+        let layout_no_track = compute_layout(&q);
+        assert!(!layout_no_track.hit_rects.iter().any(|h| h.id == ControlId::BtnMediaPlayPause));
+        assert!(!layout_no_track.hit_rects.iter().any(|h| h.id == ControlId::BtnMediaPrev));
+        assert!(!layout_no_track.hit_rects.iter().any(|h| h.id == ControlId::BtnMediaNext));
     }
 
     #[test]

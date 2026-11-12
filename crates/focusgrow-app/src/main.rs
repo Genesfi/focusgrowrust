@@ -10,6 +10,7 @@ mod qr;
 mod tray;
 mod ui;
 mod ytmpx;
+mod smtc;
 
 use anyhow::Result;
 use focusgrow_audio::{next_sound_style, AudioEngine, AMBIENT_PRESETS, AMBIENT_TRACKS};
@@ -36,7 +37,7 @@ use peeking_vinyl::{PeekingVinylWindow, WM_VINYL_COMMAND};
 use qr::{detect_lan_ipv4, encode_qr_v3_m, QrMatrix};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 use tray::{
     TrayIcon, IDM_TRAY_EXIT, IDM_TRAY_PAUSE, IDM_TRAY_RESTORE, IDM_TRAY_STOP,
@@ -48,7 +49,7 @@ use ui::{
     LayoutQuery, NumericEditField, RenderView, RunningAppView, SettingsTab, StatsAppRow,
     StatsPeriod, ACCENT_PRESETS, CITY_PRESETS, COMMON_SITE_PRESETS, TIMER_THEMES,
 };
-use windows::core::{w, PCWSTR};
+use windows::core::{w, BOOL, PCWSTR};
 use windows::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT,
     POINT, RECT, WPARAM,
@@ -73,7 +74,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateIconIndirect, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    FindWindowW, GetClientRect, GetForegroundWindow, GetMessageW, GetSystemMetrics,
+    EnumWindows, FindWindowW, GetClientRect, GetForegroundWindow, GetMessageW, GetSystemMetrics,
     GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindowVisible, KillTimer, LoadCursorW, LoadImageW, PostMessageW,
     PostQuitMessage, RegisterClassExW, SendMessageW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA,
@@ -89,7 +90,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_WINDOWPOSCHANGED, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_NOREDIRECTIONBITMAP,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
-use ytmpx::{MediaCommand, PlaybackState, TrackInfo, YtmpxBridge, YtmpxUpdate, WM_YTMPX_EVENT};
+use smtc::SystemMediaBridge;
+use ytmpx::{send_media_key_fallback, MediaCommand, PlaybackState, TrackInfo, YtmpxBridge, YtmpxUpdate, WM_YTMPX_EVENT};
 
 const APP_ICON_PNG: &[u8] = include_bytes!("../../../ui/icon.png");
 
@@ -200,6 +202,8 @@ struct AppState {
     playback: PlaybackState,
     ytmpx_connected: bool,
     ytmpx: Option<YtmpxBridge>,
+    smtc: Option<SystemMediaBridge>,
+    media_updates: Arc<Mutex<std::collections::VecDeque<YtmpxUpdate>>>,
     peeking_vinyl: Option<Box<PeekingVinylWindow>>,
     guard_tab: GuardTab,
     app_filter: AppFilter,
@@ -2005,7 +2009,7 @@ impl AppState {
             in_card_vinyl_angle: self.in_card_vinyl_angle,
             track: self.track.as_ref(),
             playback: self.playback,
-            ytmpx_connected: self.ytmpx_connected,
+            ytmpx_connected: self.ytmpx.as_ref().is_some_and(|b| b.is_connected()) || self.ytmpx_connected,
             effective_accent: self.effective_accent(),
             ends_at_text: ends_at,
             guard_tab: self.guard_tab,
@@ -2093,8 +2097,8 @@ impl AppState {
     }
 
     fn handle_ytmpx_events(&mut self) {
-        let updates = if let Some(ref bridge) = self.ytmpx {
-            bridge.drain_updates()
+        let updates: Vec<YtmpxUpdate> = if let Ok(mut q) = self.media_updates.lock() {
+            q.drain(..).collect()
         } else {
             return;
         };
@@ -2108,8 +2112,17 @@ impl AppState {
                     self.ytmpx_connected = conn;
                     need_redraw = true;
                 }
-                YtmpxUpdate::TrackChanged { track, playback } => {
-                    let prev_art = self.track.as_ref().map(|t| t.art_url.clone()).unwrap_or_default();
+                YtmpxUpdate::TrackChanged { track, playback, from_smtc } => {
+                    // If clearing track (track == None), only clear if the active track actually came from this source
+                    if track.is_none() {
+                        let is_current_from_smtc = self.track.as_ref().is_some_and(|t| t.art_url.starts_with("smtc://"));
+                        if self.track.is_some() && from_smtc != is_current_from_smtc {
+                            // Don't clear active track if an idle subsystem reported None
+                            continue;
+                        }
+                    }
+
+                    let _prev_art = self.track.as_ref().map(|t| t.art_url.clone()).unwrap_or_default();
                     let prev_title = self.track.as_ref().map(|t| t.title.clone()).unwrap_or_default();
                     let next_art = track.as_ref().map(|t| t.art_url.clone()).unwrap_or_default();
                     let next_title = track.as_ref().map(|t| t.title.clone()).unwrap_or_default();
@@ -2118,32 +2131,40 @@ impl AppState {
                     }
                     self.track = track;
                     self.playback = playback;
-                    if self.track.is_none() {
+                    if self.track.is_none() || next_art.is_empty() {
                         self.cover_frame = None;
                         self.cover_bitmap = None;
                         self.cached_dynamic_accent = None;
                         if let Some(ref mut v) = self.peeking_vinyl {
                             v.set_cover_frame(None, false);
                         }
-                    } else if next_art.is_empty() && !prev_art.is_empty() {
-                        self.cover_frame = None;
-                        self.cover_bitmap = None;
-                        self.cached_dynamic_accent = None;
                     }
                     need_redraw = true;
                     need_vinyl_sync = true;
                 }
-                YtmpxUpdate::PlaybackChanged(playback) => {
-                    self.playback = playback;
-                    need_redraw = true;
-                    need_vinyl_sync = true;
+                YtmpxUpdate::PlaybackChanged { playback, from_smtc } => {
+                    let is_current_from_smtc = self.track.as_ref().is_some_and(|t| t.art_url.starts_with("smtc://"));
+                    if self.track.is_none() || from_smtc == is_current_from_smtc {
+                        self.playback = playback;
+                        if playback == PlaybackState::Stopped {
+                            self.track = None;
+                            self.cover_frame = None;
+                            self.cover_bitmap = None;
+                            self.cached_dynamic_accent = None;
+                            if let Some(ref mut v) = self.peeking_vinyl {
+                                v.set_cover_frame(None, false);
+                            }
+                        }
+                        need_redraw = true;
+                        need_vinyl_sync = true;
+                    }
                 }
                 YtmpxUpdate::CoverLoaded { art_url, frame } => {
                     let matches_current = self
                         .track
                         .as_ref()
-                        .is_some_and(|t| t.art_url == art_url);
-                    if !matches_current {
+                        .is_some_and(|t| t.art_url == art_url || t.art_url.trim() == art_url.trim() || t.art_url.contains(&art_url) || art_url.contains(&t.art_url));
+                    if !matches_current && self.track.is_none() {
                         continue;
                     }
                     self.cover_frame = frame.clone();
@@ -3287,6 +3308,41 @@ impl AppState {
                 self.sync_vinyl_overlay();
                 self.request_redraw();
             }
+            ControlId::BtnToggleMediaSync => {
+                self.config.media_sync_enabled = !self.config.media_sync_enabled;
+                let _ = self.config.save();
+                if self.config.media_sync_enabled {
+                    if self.ytmpx.is_none() {
+                        self.ytmpx = Some(YtmpxBridge::start(self.hwnd, Arc::clone(&self.media_updates)));
+                    }
+                } else {
+                    self.ytmpx = None;
+                    self.ytmpx_connected = false;
+                }
+                self.status_hint = Some(if self.config.media_sync_enabled {
+                    "Browser Media Sync (:8765) Enabled".to_string()
+                } else {
+                    "Browser Media Sync Disabled".to_string()
+                });
+                self.request_redraw();
+            }
+            ControlId::BtnToggleSpotifySync => {
+                self.config.spotify_sync_enabled = !self.config.spotify_sync_enabled;
+                let _ = self.config.save();
+                if self.config.spotify_sync_enabled {
+                    if self.smtc.is_none() {
+                        self.smtc = Some(SystemMediaBridge::start(self.hwnd, Arc::clone(&self.media_updates)));
+                    }
+                } else {
+                    self.smtc = None;
+                }
+                self.status_hint = Some(if self.config.spotify_sync_enabled {
+                    "Spotify & Desktop Media Sync Enabled".to_string()
+                } else {
+                    "Spotify & Desktop Media Sync Disabled".to_string()
+                });
+                self.request_redraw();
+            }
             ControlId::BtnTogglePeekingVinyl => {
                 self.config.pip_peeking_vinyl_enabled = !self.config.pip_peeking_vinyl_enabled;
                 let _ = self.config.save();
@@ -3344,7 +3400,7 @@ impl AppState {
             ControlId::BtnMediaPrev => self.send_media(MediaCommand::Prev),
             ControlId::BtnMediaPlayPause => self.send_media(MediaCommand::PlayPause),
             ControlId::BtnMediaNext => self.send_media(MediaCommand::Next),
-            ControlId::BtnMediaToggleWindow => self.send_media(MediaCommand::ToggleMusicWindow),
+            ControlId::BtnMediaToggleWindow => self.activate_or_toggle_media_player(),
             ControlId::BtnCopyMobileUrl => {
                 let port = self
                     .http_bridge
@@ -3861,10 +3917,161 @@ impl AppState {
     }
 
     fn send_media(&self, cmd: MediaCommand) {
+        if let Some(ref track) = self.track {
+            if track.art_url.starts_with("smtc://") {
+                if let Some(ref smtc) = self.smtc {
+                    smtc.send_command(cmd);
+                    return;
+                }
+            }
+        }
         if let Some(ref bridge) = self.ytmpx {
             bridge.send_command(cmd);
+        } else {
+            send_media_key_fallback(cmd);
         }
     }
+
+    fn activate_or_toggle_media_player(&self) {
+        let is_spotify = self.track.as_ref().map(|t| {
+            let s = t.source.to_lowercase();
+            let e = t.exe_name.to_lowercase();
+            s.contains("spotify") || e.contains("spotify")
+        }).unwrap_or(false);
+
+        if is_spotify {
+            if let Some(hwnd) = find_spotify_window(self.track.as_ref().map(|t| t.title.as_str())) {
+                toggle_window_minimize_restore(hwnd);
+                return;
+            }
+        } else {
+            if let Some(hwnd) = find_ytm_window() {
+                toggle_window_minimize_restore(hwnd);
+                return;
+            }
+        }
+
+        // Fallback: If prioritized player window was not found, check the other
+        if let Some(hwnd) = find_ytm_window() {
+            toggle_window_minimize_restore(hwnd);
+        } else if let Some(hwnd) = find_spotify_window(self.track.as_ref().map(|t| t.title.as_str())) {
+            toggle_window_minimize_restore(hwnd);
+        }
+    }
+}
+
+// ==========================================
+// WINDOW MINIMIZE / RESTORE HELPERS
+// ==========================================
+fn toggle_window_minimize_restore(hwnd: HWND) {
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+            let _ = SetForegroundWindow(hwnd);
+        } else {
+            let _ = ShowWindow(hwnd, SW_MINIMIZE);
+        }
+    }
+}
+
+// ==========================================
+// 1. YTM (TAURI DESKTOP / PWA / BROWSER) TOGGLE LOGIC
+// ==========================================
+fn find_ytm_window() -> Option<HWND> {
+    let mut found: Option<HWND> = None;
+    unsafe {
+        let _ = EnumWindows(
+            Some(enum_find_ytm_window),
+            LPARAM(&mut found as *mut _ as isize),
+        );
+    }
+    found
+}
+
+unsafe extern "system" fn enum_find_ytm_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    if !IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() {
+        return BOOL(1);
+    }
+    let mut rc = RECT::default();
+    let _ = GetWindowRect(hwnd, &mut rc);
+    if !IsIconic(hwnd).as_bool() && ((rc.right - rc.left) < 200 || (rc.bottom - rc.top) < 150) {
+        return BOOL(1);
+    }
+    if let Some(info) = inspect_window(hwnd) {
+        let title = info.title.to_lowercase();
+        let exe = info.exe_name.to_lowercase();
+        // Ignore generic YouTube videos/podcasts explicitly
+        if title.contains(" - youtube") && !title.contains("youtube music") {
+            return BOOL(1);
+        }
+        if title.contains("youtube music") || exe.contains("youtube music") || exe.contains("ytm") || exe.contains("tauri") {
+            let out = &mut *(lparam.0 as *mut Option<HWND>);
+            *out = Some(hwnd);
+            return BOOL(0);
+        }
+    }
+    BOOL(1)
+}
+
+// ==========================================
+// 2. SPOTIFY (DESKTOP / WEB PLAYER) TOGGLE LOGIC
+// ==========================================
+struct SpotifyBrowserFindContext<'a> {
+    found: Option<HWND>,
+    track_title: Option<&'a str>,
+    fallback_browser: Option<HWND>,
+}
+
+fn find_spotify_window(track_title: Option<&str>) -> Option<HWND> {
+    let mut ctx = SpotifyBrowserFindContext {
+        found: None,
+        track_title,
+        fallback_browser: None,
+    };
+    unsafe {
+        let _ = EnumWindows(
+            Some(enum_find_spotify_window),
+            LPARAM(&mut ctx as *mut _ as isize),
+        );
+    }
+    ctx.found.or(ctx.fallback_browser)
+}
+
+unsafe extern "system" fn enum_find_spotify_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    if !IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() {
+        return BOOL(1);
+    }
+    let mut rc = RECT::default();
+    let _ = GetWindowRect(hwnd, &mut rc);
+    if !IsIconic(hwnd).as_bool() && ((rc.right - rc.left) < 200 || (rc.bottom - rc.top) < 150) {
+        return BOOL(1);
+    }
+    let ctx = &mut *(lparam.0 as *mut SpotifyBrowserFindContext<'_>);
+    if let Some(info) = inspect_window(hwnd) {
+        let title = info.title.to_lowercase();
+        let exe = info.exe_name.to_lowercase();
+        // Ignore generic YouTube videos/podcasts explicitly
+        if title.contains(" - youtube") && !title.contains("youtube music") {
+            return BOOL(1);
+        }
+        let is_browser = exe.contains("chrome")
+            || exe.contains("msedge")
+            || exe.contains("firefox")
+            || exe.contains("brave")
+            || exe.contains("opera")
+            || exe.contains("vivaldi");
+
+        let matches_spotify = title.contains("spotify") || exe.contains("spotify");
+        let matches_track = ctx.track_title.map(|t| !t.is_empty() && title.contains(&t.to_lowercase())).unwrap_or(false);
+        if matches_spotify || matches_track {
+            ctx.found = Some(hwnd);
+            return BOOL(0);
+        }
+        if is_browser && ctx.fallback_browser.is_none() {
+            ctx.fallback_browser = Some(hwnd);
+        }
+    }
+    BOOL(1)
 }
 
 fn local_clock_and_date() -> (String, String) {
@@ -4200,7 +4407,17 @@ fn run_app() -> Result<()> {
     let peeking_vinyl = PeekingVinylWindow::create(hwnd).ok();
     let health_hud = HealthHudWindow::create().ok();
     let overlay = OverlayWindow::new(hwnd, config.block_all_monitors).ok();
-    let ytmpx = Some(YtmpxBridge::start(hwnd));
+    let media_updates = Arc::new(Mutex::new(std::collections::VecDeque::new()));
+    let ytmpx = if config.media_sync_enabled {
+        Some(YtmpxBridge::start(hwnd, Arc::clone(&media_updates)))
+    } else {
+        None
+    };
+    let smtc = if config.spotify_sync_enabled {
+        Some(SystemMediaBridge::start(hwnd, Arc::clone(&media_updates)))
+    } else {
+        None
+    };
     let guard = GuardState::from_config(&config);
     let prayer_mgr = PrayerManager::with_offset(
         config.prayer_lat,
@@ -4262,6 +4479,8 @@ fn run_app() -> Result<()> {
         playback: PlaybackState::Stopped,
         ytmpx_connected: false,
         ytmpx,
+        smtc,
+        media_updates,
         peeking_vinyl,
         guard_tab: GuardTab::BlockedApps,
         app_filter: AppFilter::All,

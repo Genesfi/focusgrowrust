@@ -381,6 +381,8 @@ pub struct AppConfig {
     pub app_categories: BTreeMap<String, String>,
     pub last_settings_tab: String,
     pub webview2_migrated: bool,
+    pub media_sync_enabled: bool,
+    pub spotify_sync_enabled: bool,
 }
 
 impl Default for AppConfig {
@@ -476,6 +478,8 @@ impl Default for AppConfig {
             app_categories: BTreeMap::new(),
             last_settings_tab: "appearance".to_string(),
             webview2_migrated: false,
+            media_sync_enabled: true,
+            spotify_sync_enabled: true,
         }
     }
 }
