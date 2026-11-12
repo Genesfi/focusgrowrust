@@ -2,7 +2,7 @@
 
 <p align="center">
   <img src="ui/icon.png" width="88" height="88" alt="FocusGrow Logo" /><br>
-  <b>A lightweight, hardware-accelerated Windows desktop productivity suite featuring Dual Focus modes, real-time app &amp; website blocking, YouTube Music vinyl sync, offline procedural soundscapes, automated prayer times schedule enforcement, and productivity analytics.</b>
+  <b>A lightweight, hardware-accelerated Windows desktop productivity suite featuring Dual Focus modes, real-time app &amp; website blocking, Spotify &amp; YouTube Music vinyl sync, offline procedural soundscapes, automated prayer times schedule enforcement, and productivity analytics.</b>
 </p>
 
 <p align="center">
@@ -10,6 +10,7 @@
   <img src="https://img.shields.io/badge/Language-Rust%202021-orange?logo=rust" alt="Rust">
   <img src="https://img.shields.io/badge/Graphics-Direct2D%20%2B%20DirectComposition-blueviolet" alt="Direct2D">
   <img src="https://img.shields.io/badge/Audio-WASAPI%20Synth-green" alt="WASAPI">
+  <img src="https://img.shields.io/badge/Media%20Sync-Spotify%20%7C%20YT%20Music-1DB954?logo=spotify" alt="Media Sync">
   <img src="https://img.shields.io/badge/License-MIT-blue" alt="License">
 </p>
 
@@ -108,8 +109,13 @@
 - **Location Picker & Auto GPS**: **Auto GPS** via Windows `GeoCoordinateWatcher` + `ip-api.com` fallback, 34 offline preset cities, and live OpenStreetMap Nominatim search.
 - **Anti-Bypass 15-Minute Window**: Computed from local wall-clock time so closing and reopening FocusGrow mid-prayer still enforces the remaining break window.
 
-### 🎵 Media Sync, GIFs & Offline Audio
-- **YTMPX Integration (`ws://127.0.0.1:8765`)**: Live track info, transport controls, Peeking Vinyl overlay, and high-contrast complementary album accent extraction.
+### 🎵 Media Sync, Vinyl & Audio Experience
+- **Dual Media Sync (Spotify & YouTube Music)**:
+  - **Native Windows SMTC Bridge (`smtc.rs`)**: Synchronizes with **Spotify Desktop** and **Spotify Web Player** (Edge, Chrome, Brave, Firefox, Opera) via Windows System Media Transport Controls. Features zero-latency stream cover art decoding, Play/Pause/Next/Prev controls, and dynamic complementary color extraction.
+  - **YTMPX WebSocket Integration (`ws://127.0.0.1:8765`)**: Low-latency bi-directional sync for YouTube Music (Web extension & Tauri desktop app) with automated Google CDN cover art resolution and fallback.
+  - **Smart Non-Music Filter**: Intelligently rejects regular YouTube videos, video streams, and podcasts (`MediaPlaybackType::Video`) so media controls only focus on your music flow.
+  - **Window Toggle & Minimize**: 1-click minimize and restore for Tauri desktop app, PWA, and browser tabs with intelligent window station resolution.
+  - **Peeking Vinyl Companion**: Desktop-transparent spinning vinyl record with live marquee track/artist ticker.
 - **Instant Progressive GIFs**: WIC Frame-0 streaming on launch followed by background frame append (`gif_decoder.rs`), supporting `Circle` and `Full` display styles and up to 5 recent GIFs.
 - **WASAPI Procedural Mixer**: 100% offline DSP synthesis (`Mechanical Typing`, `Cozy Campfire`, `Night Crickets`, `Rain on Window`, `Heavy Downpour`, `Night Breeze`, `Wall Clock Tick`, `Crowded Cafe` English, `Tokyo Cafe` Japanese, `Ocean Tide Waves`, `Zen Alpha 432Hz`) with seamless auto-saving `Custom 1` & `Custom 2` preset slots + custom alert audio files.
 
@@ -122,7 +128,7 @@
 | **`focusgrow-core`** | Domain state, timer, stats, prayer & config | `config.rs`, `timer.rs`, `stats.rs`, `guard.rs`, `prayer.rs`, `gif_store.rs`, `migrate.rs` |
 | **`focusgrow-gfx`** | D3D11 / D2D1 / DirectComposition & WIC | `dcomp.rs`, `gif_decoder.rs`, `color_extract.rs`, `vinyl_renderer.rs` |
 | **`focusgrow-audio`** | Shared-mode WASAPI synth & chimes | `wasapi.rs`, `synth.rs` |
-| **`focusgrow-app`** | Native Win32 app, UI, overlays & bridges | `main.rs`, `ui.rs`, `app_guard.rs`, `overlay.rs`, `health_hud.rs`, `peeking_vinyl.rs`, `http_bridge.rs`, `ytmpx.rs`, `qr.rs`, `file_dialog.rs`, `tray.rs` |
+| **`focusgrow-app`** | Native Win32 app, UI, overlays & bridges | `main.rs`, `ui.rs`, `app_guard.rs`, `smtc.rs`, `overlay.rs`, `health_hud.rs`, `peeking_vinyl.rs`, `http_bridge.rs`, `ytmpx.rs`, `qr.rs`, `file_dialog.rs`, `tray.rs` |
 
 ---
 
@@ -135,13 +141,18 @@
 ### Commands
 ```powershell
 # Run unit tests
-cargo test --manifest-path "focusgrow-rs\Cargo.toml"
+cargo test
 
 # Build optimized release binary
-cargo build --manifest-path "focusgrow-rs\Cargo.toml" --release
+cargo build --release
 
 # Output binary:
-# focusgrow-rs\target\release\FocusGrow.exe
+# target\release\FocusGrow.exe
+
+# Build complete Windows installer with Inno Setup 6:
+.\build_installer.bat
+# Output installer:
+# dist\FocusGrow_Setup_v1.0.0.exe
 ```
 
 ---
