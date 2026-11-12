@@ -1,4 +1,22 @@
-target/
+/target/
 *.pdb
 *.log
+*.exe
+
+# User data & local session databases
+/data/
+*.local
+
+# IDE & Editor caches
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Windows Explorer artifacts
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
 

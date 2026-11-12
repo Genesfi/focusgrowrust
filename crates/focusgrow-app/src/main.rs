@@ -23,7 +23,7 @@ use focusgrow_core::gif_store::{
 use focusgrow_core::{
     auto_migrate_webview2, AmbientMode, AppConfig, DailyStats, FocusTimer, GifDisplayMode,
     GuardState, NamedPrayer, NeutralOverstayEvent, NeutralOverstayTracker, PersistedSession,
-    PrayerManager, SessionPhase, VinylSide,
+    PipStyle, PrayerManager, SessionPhase, VinylSide,
 };
 use focusgrow_gfx::{
     decode_image_bytes, decode_image_file_progressive, extract_album_accent, upload_frame_bitmap,
@@ -77,7 +77,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindowVisible, KillTimer, LoadCursorW, LoadImageW, PostMessageW,
     PostQuitMessage, RegisterClassExW, SendMessageW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA,
-    GWL_EXSTYLE, HICON, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCLIENT, HTLEFT, HTRIGHT, HTTOP,
+    GWL_EXSTYLE, HICON, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP,
     HTTOPLEFT, HTTOPRIGHT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, ICONINFO, ICON_BIG, ICON_SMALL,
     IDC_ARROW, IMAGE_ICON, LR_DEFAULTSIZE, MINMAXINFO, MSG, SC_MOVE, SM_CXSCREEN,
     SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -1549,8 +1549,13 @@ impl AppState {
             self.config.pip_x = Some(x);
             self.config.pip_y = Some(y);
             if update_size {
-                self.config.pip_width = w;
-                self.config.pip_height = h;
+                if self.config.pip_style == PipStyle::Capsule {
+                    self.config.pip_capsule_width = w.clamp(195, 520);
+                    self.config.pip_capsule_height = h.max(68);
+                } else {
+                    self.config.pip_width = w.max(180);
+                    self.config.pip_height = h.max(220);
+                }
             }
         } else if !self.is_maximized {
             self.normal_rect_dip = (x, y, w, h);
@@ -1594,11 +1599,12 @@ impl AppState {
         self.playback == PlaybackState::Playing
             && self.track.is_some()
             && (self.config.ambient_mode == AmbientMode::YtMusic
+                || (self.config.pip_mode && self.config.pip_style == PipStyle::Capsule && self.config.pip_capsule_album_bg && self.config.pip_capsule_album_spin)
                 || (!self.config.pip_mode && self.settings_tab == Some(SettingsTab::MobileSync)))
     }
 
     fn sync_vinyl_overlay(&mut self) {
-        let enabled = self.config.pip_peeking_vinyl_enabled && self.config.pip_mode;
+        let enabled = self.config.pip_peeking_vinyl_enabled && self.config.pip_mode && self.config.pip_style == PipStyle::Card;
         let has_track = self.track.is_some();
         let is_playing = self.playback == PlaybackState::Playing;
         let accent = self.effective_accent().to_string();
@@ -2172,8 +2178,16 @@ impl AppState {
             self.is_maximized = false;
             self.show_pip_gif_drawer = false;
 
-            let target_w = self.dip_to_px(self.config.pip_width);
-            let target_h = self.dip_to_px(self.config.pip_height);
+            let target_w = if self.config.pip_style == PipStyle::Capsule {
+                self.dip_to_px(self.config.pip_capsule_width.clamp(195, 520))
+            } else {
+                self.dip_to_px(self.config.pip_width.max(180))
+            };
+            let target_h = if self.config.pip_style == PipStyle::Capsule {
+                self.dip_to_px(self.config.pip_capsule_height.max(68))
+            } else {
+                self.dip_to_px(self.config.pip_height.max(220))
+            };
             let screen_w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
             let screen_h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
             let (target_x, target_y) = clamp_window_pos_to_virtual_screen(
@@ -2204,8 +2218,13 @@ impl AppState {
         } else {
             self.config.pip_x = Some((rc.left as f32 / scale).round() as i32);
             self.config.pip_y = Some((rc.top as f32 / scale).round() as i32);
-            self.config.pip_width = ((rc.right - rc.left) as f32 / scale).round() as i32;
-            self.config.pip_height = ((rc.bottom - rc.top) as f32 / scale).round() as i32;
+            if self.config.pip_style == PipStyle::Card {
+                self.config.pip_width = (((rc.right - rc.left) as f32 / scale).round() as i32).max(180);
+                self.config.pip_height = (((rc.bottom - rc.top) as f32 / scale).round() as i32).max(220);
+            } else {
+                self.config.pip_capsule_width = (((rc.right - rc.left) as f32 / scale).round() as i32).clamp(195, 520);
+                self.config.pip_capsule_height = (((rc.bottom - rc.top) as f32 / scale).round() as i32).max(68);
+            }
             self.config.pip_mode = false;
             self.show_pip_gif_drawer = false;
 
@@ -2227,6 +2246,54 @@ impl AppState {
         let _ = self.config.save();
         self.sync_vinyl_overlay();
         self.request_redraw();
+    }
+
+    fn toggle_pip_style(&mut self) {
+        if !self.config.pip_mode {
+            return;
+        }
+        self.config.pip_style = match self.config.pip_style {
+            PipStyle::Card => PipStyle::Capsule,
+            PipStyle::Capsule => PipStyle::Card,
+        };
+        let _ = self.config.save();
+        self.apply_pip_geometry();
+        self.sync_vinyl_overlay();
+        self.request_redraw();
+    }
+
+    fn apply_pip_geometry(&mut self) {
+        if !self.config.pip_mode {
+            return;
+        }
+        let target_w = if self.config.pip_style == PipStyle::Capsule {
+            self.dip_to_px(self.config.pip_capsule_width.clamp(195, 520))
+        } else {
+            self.dip_to_px(self.config.pip_width.max(180))
+        };
+        let target_h = if self.config.pip_style == PipStyle::Capsule {
+            self.dip_to_px(self.config.pip_capsule_height.max(68))
+        } else {
+            self.dip_to_px(self.config.pip_height.max(220))
+        };
+        let mut rc = RECT::default();
+        unsafe {
+            let _ = GetWindowRect(self.hwnd, &mut rc);
+        }
+        let (clamped_x, clamped_y) =
+            clamp_window_pos_to_virtual_screen(rc.left, rc.top, target_w, target_h);
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                Some(HWND_TOPMOST),
+                clamped_x,
+                clamped_y,
+                target_w,
+                target_h,
+                SWP_NOACTIVATE,
+            );
+        }
+        let _ = self.surface.resize(target_w as u32, target_h as u32, self.surface.dpi);
     }
 
     fn apply_window_chrome(&self) {
@@ -2454,6 +2521,51 @@ impl AppState {
                 }
             }
             ControlId::BtnTogglePip => self.toggle_pip(),
+            ControlId::BtnTogglePipStyle => self.toggle_pip_style(),
+            ControlId::BtnPipStyleCard => {
+                if self.config.pip_style != PipStyle::Card {
+                    self.config.pip_style = PipStyle::Card;
+                    let _ = self.config.save();
+                    if self.config.pip_mode {
+                        self.apply_pip_geometry();
+                        self.sync_vinyl_overlay();
+                    }
+                    self.request_redraw();
+                }
+            }
+            ControlId::BtnPipStyleCapsule => {
+                if self.config.pip_style != PipStyle::Capsule {
+                    self.config.pip_style = PipStyle::Capsule;
+                    let _ = self.config.save();
+                    if self.config.pip_mode {
+                        self.apply_pip_geometry();
+                        self.sync_vinyl_overlay();
+                    }
+                    self.request_redraw();
+                }
+            }
+            ControlId::BtnToggleCapsuleAlbumBg => {
+                self.config.pip_capsule_album_bg = !self.config.pip_capsule_album_bg;
+                let _ = self.config.save();
+                self.request_redraw();
+            }
+            ControlId::BtnToggleCapsuleAlbumSpin => {
+                self.config.pip_capsule_album_spin = !self.config.pip_capsule_album_spin;
+                let _ = self.config.save();
+                self.request_redraw();
+            }
+            ControlId::BtnCapsuleAlbumOpacity => {
+                self.config.pip_capsule_album_opacity = match self.config.pip_capsule_album_opacity {
+                    0..=25 => 35,
+                    26..=40 => 50,
+                    41..=65 => 75,
+                    66..=85 => 100,
+                    _ => 20,
+                };
+                self.config.sanitize();
+                let _ = self.config.save();
+                self.request_redraw();
+            }
             ControlId::BtnTopToolbarPip => {
                 self.config.auto_pip_on_blur = !self.config.auto_pip_on_blur;
                 self.status_hint = None;
@@ -3250,10 +3362,13 @@ impl AppState {
             }
             ControlId::BtnNeutralThreshold => {
                 self.config.neutral_overstay_mins = match self.config.neutral_overstay_mins {
-                    0..=10 => 15,
-                    11..=22 => 30,
+                    0..=2 => 5,
+                    3..=7 => 10,
+                    8..=12 => 15,
+                    13..=22 => 30,
                     23..=38 => 45,
-                    _ => 10,
+                    39..=52 => 60,
+                    _ => 2,
                 };
                 self.config.sanitize();
                 let _ = self.config.save();
@@ -3890,7 +4005,11 @@ fn run_app() -> Result<()> {
     let dash_w = config.dashboard_width.clamp(760, 1800);
     let dash_h = config.dashboard_height.clamp(520, 1200);
     let (init_w_dip, init_h_dip) = if config.pip_mode {
-        (config.pip_width, config.pip_height)
+        if config.pip_style == PipStyle::Capsule {
+            (config.pip_capsule_width.clamp(195, 520), config.pip_capsule_height.max(68))
+        } else {
+            (config.pip_width.max(180), config.pip_height.max(220))
+        }
     } else {
         (dash_w, dash_h)
     };
@@ -4230,10 +4349,17 @@ unsafe extern "system" fn wnd_proc(
         WM_GETMINMAXINFO => {
             let mmi = &mut *(lparam.0 as *mut MINMAXINFO);
             if state.config.pip_mode {
-                mmi.ptMinTrackSize.x = state.dip_to_px(150);
-                mmi.ptMinTrackSize.y = state.dip_to_px(210);
-                mmi.ptMaxTrackSize.x = state.dip_to_px(440);
-                mmi.ptMaxTrackSize.y = state.dip_to_px(550);
+                if state.config.pip_style == PipStyle::Capsule {
+                    mmi.ptMinTrackSize.x = state.dip_to_px(195);
+                    mmi.ptMinTrackSize.y = state.dip_to_px(68);
+                    mmi.ptMaxTrackSize.x = state.dip_to_px(520);
+                    mmi.ptMaxTrackSize.y = state.dip_to_px(68);
+                } else {
+                    mmi.ptMinTrackSize.x = state.dip_to_px(150);
+                    mmi.ptMinTrackSize.y = state.dip_to_px(210);
+                    mmi.ptMaxTrackSize.x = state.dip_to_px(440);
+                    mmi.ptMaxTrackSize.y = state.dip_to_px(550);
+                }
             } else {
                 mmi.ptMinTrackSize.x = state.dip_to_px(760);
                 mmi.ptMinTrackSize.y = state.dip_to_px(520);
@@ -4245,6 +4371,29 @@ unsafe extern "system" fn wnd_proc(
             let sy = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
             let mut rc = RECT::default();
             let _ = GetWindowRect(hwnd, &mut rc);
+
+            // In Capsule mode: allow horizontal resizing from borders, native dragging from body, and clicking buttons
+            if state.config.pip_mode && state.config.pip_style == PipStyle::Capsule {
+                let border = state.dip_to_px(7).max(5);
+                if sx < rc.left + border {
+                    return LRESULT(HTLEFT as isize);
+                }
+                if sx >= rc.right - border {
+                    return LRESULT(HTRIGHT as isize);
+                }
+
+                let x_dip = state.px_to_dip(sx - rc.left);
+                let y_dip = state.px_to_dip(sy - rc.top);
+                let (w_dip, h_dip) = state.surface.dip_size();
+                let layout = compute_layout(&state.layout_query(w_dip, h_dip));
+                if let Some(hit) = layout.hit_test(x_dip, y_dip) {
+                    if hit != ControlId::DragBar {
+                        return LRESULT(HTCLIENT as isize);
+                    }
+                }
+                return LRESULT(HTCAPTION as isize);
+            }
+
             let border = state.dip_to_px(9).max(7);
 
             let left = sx < rc.left + border;

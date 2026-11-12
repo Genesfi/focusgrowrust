@@ -5,8 +5,8 @@ use focusgrow_core::stats::{
     weekday_index, weekday_short,
 };
 use focusgrow_core::{
-    AmbientMode, AppConfig, DailyStats, FocusTimer, GifDisplayMode, NamedPrayer, SessionPhase,
-    VinylSide,
+    AmbientMode, AppConfig, DailyStats, FocusTimer, GifDisplayMode, NamedPrayer, PipStyle,
+    SessionPhase, VinylSide,
 };
 use focusgrow_gfx::dcomp::{
     create_text_format, create_text_format_single_line, hex_color, rgba,
@@ -262,6 +262,12 @@ pub enum ControlId {
     BtnMaximizeRestore,
     BtnClose,
     BtnTogglePip,
+    BtnTogglePipStyle,
+    BtnPipStyleCard,
+    BtnPipStyleCapsule,
+    BtnToggleCapsuleAlbumBg,
+    BtnToggleCapsuleAlbumSpin,
+    BtnCapsuleAlbumOpacity,
     BtnTopToolbarSound,
     BtnTopToolbarMusic,
     #[allow(dead_code)]
@@ -561,9 +567,125 @@ pub struct LayoutQuery<'a> {
 
 pub fn compute_layout(q: &LayoutQuery<'_>) -> UiLayout {
     if q.config.pip_mode {
-        compute_pip_layout(q.w, q.h, q.config, q.show_pip_drawer, q.has_track, q.phase)
+        if q.config.pip_style == PipStyle::Capsule {
+            compute_pip_capsule_layout(q.w, q.h, q.config, q.has_track, q.phase)
+        } else {
+            compute_pip_layout(q.w, q.h, q.config, q.show_pip_drawer, q.has_track, q.phase)
+        }
     } else {
         compute_dashboard_layout(q)
+    }
+}
+
+fn compute_pip_capsule_layout(
+    w: f32,
+    _h: f32,
+    _config: &AppConfig,
+    _has_track: bool,
+    _phase: SessionPhase,
+) -> UiLayout {
+    let mut hits = Vec::new();
+    let pad = 2.0f32;
+    let capsule_h = 38.0;
+    let capsule_w = (w - pad * 2.0).max(120.0);
+    let capsule_x = pad;
+    let capsule_y = pad;
+    let capsule_rect = RectF {
+        x: capsule_x,
+        y: capsule_y,
+        w: capsule_w,
+        h: capsule_h,
+    };
+
+    let is_compact = capsule_w < 235.0;
+    let btn_s = if is_compact { 16.0 } else { 18.0 };
+    let btn_gap = if is_compact { 2.0 } else { 3.0 };
+    let btn_margin = if is_compact { 5.0 } else { 8.0 };
+    let btn_y = capsule_rect.y + (capsule_h - btn_s) * 0.5;
+
+    let close_x = capsule_rect.x + capsule_rect.w - btn_margin - btn_s;
+    let pop_x = close_x - btn_gap - btn_s;
+    let style_x = pop_x - btn_gap - btn_s;
+    let pp_x = style_x - btn_gap - btn_s;
+
+    // Draggable area: the entire capsule body from left up to the action buttons
+    let drag_w = (pp_x - 3.0 - capsule_rect.x).max(20.0);
+    hits.push(HitRect {
+        id: ControlId::DragBar,
+        rect: RectF {
+            x: capsule_rect.x,
+            y: capsule_rect.y,
+            w: drag_w,
+            h: capsule_h,
+        },
+    });
+
+    // 4 Action buttons on the right of the capsule
+    hits.push(HitRect {
+        id: ControlId::BtnClose,
+        rect: RectF { x: close_x, y: btn_y, w: btn_s, h: btn_s },
+    });
+    hits.push(HitRect {
+        id: ControlId::BtnTogglePip,
+        rect: RectF { x: pop_x, y: btn_y, w: btn_s, h: btn_s },
+    });
+    hits.push(HitRect {
+        id: ControlId::BtnTogglePipStyle,
+        rect: RectF { x: style_x, y: btn_y, w: btn_s, h: btn_s },
+    });
+    hits.push(HitRect {
+        id: ControlId::BtnPlayPause,
+        rect: RectF { x: pp_x, y: btn_y, w: btn_s, h: btn_s },
+    });
+
+    // Floating Glass Under-Bar for YouTube Music Controls
+    let under_h = 24.0;
+    let under_y = capsule_rect.y + capsule_h + 3.0;
+    let under_w = if is_compact {
+        124.0f32.min(capsule_w - 6.0).max(60.0)
+    } else {
+        136.0f32.min(capsule_w - 12.0).max(60.0)
+    };
+    let under_x = capsule_rect.x + (capsule_w - under_w) * 0.5;
+    let btn_under_y = under_y + (under_h - 20.0) * 0.5;
+    let slot_w = under_w / 4.0;
+
+    let b_prev_w = if is_compact { 24.0 } else { 26.0 };
+    let b_pp_w = if is_compact { 28.0 } else { 32.0 };
+    let b_next_w = if is_compact { 24.0 } else { 26.0 };
+    let b_win_w = if is_compact { 24.0 } else { 28.0 };
+
+    hits.push(HitRect {
+        id: ControlId::BtnMediaPrev,
+        rect: RectF { x: under_x + (slot_w - b_prev_w) * 0.5, y: btn_under_y, w: b_prev_w, h: 20.0 },
+    });
+    hits.push(HitRect {
+        id: ControlId::BtnMediaPlayPause,
+        rect: RectF { x: under_x + slot_w + (slot_w - b_pp_w) * 0.5, y: btn_under_y, w: b_pp_w, h: 20.0 },
+    });
+    hits.push(HitRect {
+        id: ControlId::BtnMediaNext,
+        rect: RectF { x: under_x + slot_w * 2.0 + (slot_w - b_next_w) * 0.5, y: btn_under_y, w: b_next_w, h: 20.0 },
+    });
+    hits.push(HitRect {
+        id: ControlId::BtnMediaToggleWindow,
+        rect: RectF { x: under_x + slot_w * 3.0 + (slot_w - b_win_w) * 0.5, y: btn_under_y, w: b_win_w, h: 20.0 },
+    });
+
+    UiLayout {
+        card_rect: capsule_rect,
+        card_radius: capsule_h * 0.5,
+        drag_rect: capsule_rect,
+        gauge_cx: capsule_rect.x + 19.0,
+        gauge_cy: capsule_rect.y + 19.0,
+        gauge_radius: 15.0,
+        left_card_rect: Some(capsule_rect),
+        guard_list_rect: None,
+        modal_rect: None,
+        modal_body_rect: None,
+        settings_max_scroll: 0.0,
+        opacity_slider_rect: None,
+        hit_rects: hits,
     }
 }
 
@@ -584,22 +706,27 @@ fn compute_pip_layout(
         h: (h - pad * 2.0).max(206.0),
     };
 
-    // Match WebView2 compact PiP header: title + only 2 tiny icons (Pop-out & Close)
+    // Match WebView2 compact PiP header: title + 3 tiny icons (Style, Pop-out & Close)
     let header_h = 26.0;
     let btn_s = 18.0;
     let btn_y = card_rect.y + 5.0;
     let close_x = card_rect.x + card_rect.w - 8.0 - btn_s;
     let pip_x = close_x - 4.0 - btn_s;
+    let style_x = pip_x - 4.0 - btn_s;
 
     let drag_rect = RectF {
         x: card_rect.x,
         y: card_rect.y,
-        w: (pip_x - card_rect.x - 4.0).max(60.0),
+        w: (style_x - card_rect.x - 4.0).max(40.0),
         h: header_h,
     };
     hits.push(HitRect {
         id: ControlId::DragBar,
         rect: drag_rect,
+    });
+    hits.push(HitRect {
+        id: ControlId::BtnTogglePipStyle,
+        rect: RectF { x: style_x, y: btn_y, w: btn_s, h: btn_s },
     });
     hits.push(HitRect {
         id: ControlId::BtnTogglePip,
@@ -1509,21 +1636,42 @@ fn push_settings_tab_hits(
             total_h = ids.len() as f32 * 54.0;
         }
         SettingsTab::PipMode => {
+            let mut y = body.y - scroll;
+            let sw_mode = (inner_w - 10.0) * 0.5;
+            push_modal_hit(body, hits, ControlId::BtnPipStyleCard, RectF { x: body.x, y: y + 20.0, w: sw_mode, h: 30.0 });
+            push_modal_hit(body, hits, ControlId::BtnPipStyleCapsule, RectF { x: body.x + sw_mode + 10.0, y: y + 20.0, w: sw_mode, h: 30.0 });
+            y += 60.0;
+
+            if config.pip_style == PipStyle::Capsule {
+                push_modal_hit(body, hits, ControlId::BtnToggleCapsuleAlbumBg, RectF { x: body.x, y, w: inner_w, h: 48.0 });
+                y += 54.0;
+                if config.pip_capsule_album_bg {
+                    push_modal_hit(body, hits, ControlId::BtnToggleCapsuleAlbumSpin, RectF { x: body.x, y, w: inner_w, h: 48.0 });
+                    y += 54.0;
+                    push_modal_hit(body, hits, ControlId::BtnCapsuleAlbumOpacity, RectF { x: body.x, y, w: inner_w, h: 48.0 });
+                    y += 54.0;
+                }
+            }
+
             let ids = [
                 ControlId::BtnToggleAutoPip,
                 ControlId::BtnToggleAutoPipBlur,
                 ControlId::BtnToggleHideTaskbarInPip,
-                ControlId::BtnTogglePeekingVinyl,
             ];
-            let mut y = body.y - scroll;
             for id in ids {
                 push_modal_hit(body, hits, id, RectF { x: body.x, y, w: inner_w, h: 48.0 });
                 y += 54.0;
             }
-            let sw = (inner_w - 10.0) * 0.5;
-            push_modal_hit(body, hits, ControlId::BtnVinylSideLeft, RectF { x: body.x, y: y + 20.0, w: sw, h: 30.0 });
-            push_modal_hit(body, hits, ControlId::BtnVinylSideRight, RectF { x: body.x + sw + 10.0, y: y + 20.0, w: sw, h: 30.0 });
-            total_h = ids.len() as f32 * 54.0 + 60.0;
+
+            if config.pip_style == PipStyle::Card {
+                push_modal_hit(body, hits, ControlId::BtnTogglePeekingVinyl, RectF { x: body.x, y, w: inner_w, h: 48.0 });
+                y += 54.0;
+                let sw = (inner_w - 10.0) * 0.5;
+                push_modal_hit(body, hits, ControlId::BtnVinylSideLeft, RectF { x: body.x, y: y + 20.0, w: sw, h: 30.0 });
+                push_modal_hit(body, hits, ControlId::BtnVinylSideRight, RectF { x: body.x + sw + 10.0, y: y + 20.0, w: sw, h: 30.0 });
+                y += 60.0;
+            }
+            total_h = y - (body.y - scroll) + 20.0;
         }
         SettingsTab::Sound => {
             let sl = sound_tab_layout(body, config, scroll);
@@ -1772,7 +1920,11 @@ pub fn render_ui(
     }
 
     if view.config.pip_mode {
-        render_pip_ui(dc, factory, dwrite, &layout, view)?;
+        if view.config.pip_style == PipStyle::Capsule {
+            render_pip_capsule_ui(dc, factory, dwrite, &layout, view)?;
+        } else {
+            render_pip_ui(dc, factory, dwrite, &layout, view)?;
+        }
     } else {
         render_dashboard_ui(dc, factory, dwrite, &layout, view)?;
     }
@@ -1793,7 +1945,7 @@ fn render_pip_ui(
     // Full-bleed backdrop inside PiP card (GIF or YT Music album art)
     draw_backdrop_media(dc, factory, card, layout.card_radius, layout, view, true)?;
 
-    // Compact header matching WebView2 PiP: "Focus period (X/Y)" + 2 icons (Expand, Close)
+    // Compact header matching WebView2 PiP: "Focus period (X/Y)" + 3 icons (Style, Expand, Close)
     let header_title = match view.timer.phase() {
         SessionPhase::Idle => "FocusGrow".to_string(),
         SessionPhase::Focusing => {
@@ -1812,7 +1964,7 @@ fn render_pip_ui(
         RectF {
             x: card.x + 10.0,
             y: card.y + 4.0,
-            w: (card.w - 64.0).max(60.0),
+            w: (card.w - 82.0).max(40.0),
             h: 20.0,
         },
         header_size,
@@ -1821,6 +1973,7 @@ fn render_pip_ui(
         DWRITE_TEXT_ALIGNMENT_LEADING,
     )?;
 
+    draw_vector_pill(dc, find_hit(layout, ControlId::BtnTogglePipStyle), VectorIcon::CapsulePill, view.hovered == Some(ControlId::BtnTogglePipStyle), false, "#93C5FD")?;
     draw_vector_pill(dc, find_hit(layout, ControlId::BtnTogglePip), VectorIcon::PopOut, view.hovered == Some(ControlId::BtnTogglePip), false, view.effective_accent)?;
     draw_vector_pill(dc, find_hit(layout, ControlId::BtnClose), VectorIcon::CloseSoft, view.hovered == Some(ControlId::BtnClose), false, "#D4D4D8")?;
 
@@ -1840,6 +1993,390 @@ fn render_pip_ui(
         };
         draw_music_ticker_pill(dc, factory, dwrite, pill, layout, view, track)?;
     }
+
+    Ok(())
+}
+
+fn render_pip_capsule_ui(
+    dc: &ID2D1DeviceContext,
+    factory: &ID2D1Factory1,
+    dwrite: &IDWriteFactory,
+    layout: &UiLayout,
+    view: &RenderView<'_>,
+) -> Result<()> {
+    let capsule = layout.card_rect;
+    let radius = capsule.h * 0.5;
+
+    // 1. Background Glass Capsule
+    draw_rounded_card(
+        dc,
+        capsule,
+        radius,
+        rgba(16, 16, 20, 0.94),
+        rgba(255, 255, 255, 0.14),
+        1.0,
+    )?;
+
+    // 1b. Subtle pomodoro progress outline around capsule
+    let progress = if view.timer.phase() == SessionPhase::Idle {
+        0.0
+    } else {
+        (1.0 - view.timer.smooth_remaining_fraction(std::time::Instant::now())).clamp(0.0, 1.0)
+    };
+    if progress > 0.001 && view.timer.phase() != SessionPhase::Idle {
+        let prog_brush = unsafe { dc.CreateSolidColorBrush(&hex_color(view.effective_accent, 0.60), None) }?;
+        let rr = D2D1_ROUNDED_RECT {
+            rect: capsule.to_d2d(),
+            radiusX: radius,
+            radiusY: radius,
+        };
+        unsafe {
+            dc.DrawRoundedRectangle(&rr, &prog_brush, 1.5, None);
+        }
+    }
+
+    // 1c. YouTube Music Album Art Full-Capsule Background (Rotates smoothly like vinyl)
+    if view.config.pip_capsule_album_bg {
+        if let Some(cover) = view.cover_bitmap {
+            let opacity = (view.config.pip_capsule_album_opacity as f32 / 100.0).clamp(0.05, 1.0);
+            let cx = capsule.x + capsule.w * 0.5;
+            let cy = capsule.y + capsule.h * 0.5;
+            let diag = (capsule.w * capsule.w + capsule.h * capsule.h).sqrt().max(capsule.w);
+            let art_s = diag * 1.08;
+            let art_rect = RectF {
+                x: cx - art_s * 0.5,
+                y: cy - art_s * 0.5,
+                w: art_s,
+                h: art_s,
+            };
+
+            let geo = unsafe {
+                factory.CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT {
+                    rect: capsule.to_d2d(),
+                    radiusX: radius,
+                    radiusY: radius,
+                })
+            };
+            if let Ok(g) = geo {
+                let mask: ID2D1Geometry = g.into();
+                let params = D2D1_LAYER_PARAMETERS1 {
+                    contentBounds: capsule.to_d2d(),
+                    geometricMask: core::mem::ManuallyDrop::new(Some(mask)),
+                    maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                    maskTransform: Matrix3x2::identity(),
+                    opacity: 1.0,
+                    opacityBrush: core::mem::ManuallyDrop::new(None),
+                    layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+                };
+                unsafe {
+                    dc.PushLayer(&params, None);
+                }
+
+                if view.config.pip_capsule_album_spin {
+                    let angle = if view.playback == PlaybackState::Playing {
+                        view.in_card_vinyl_angle
+                    } else {
+                        0.0
+                    };
+                    let mut prev = Matrix3x2::identity();
+                    unsafe {
+                        dc.GetTransform(&mut prev);
+                        dc.SetTransform(&(Matrix3x2::rotation_around(angle, pt(cx, cy)) * prev));
+                        dc.DrawBitmap(
+                            cover,
+                            Some(&art_rect.to_d2d()),
+                            opacity,
+                            D2D1_INTERPOLATION_MODE_LINEAR,
+                            None,
+                            None,
+                        );
+                        dc.SetTransform(&prev);
+                    }
+                } else {
+                    unsafe {
+                        dc.DrawBitmap(
+                            cover,
+                            Some(&art_rect.to_d2d()),
+                            opacity,
+                            D2D1_INTERPOLATION_MODE_LINEAR,
+                            None,
+                            None,
+                        );
+                    }
+                }
+
+                // Soft dark wash so text, timer, and avatar remain crisp
+                if let Ok(wash_brush) = unsafe { dc.CreateSolidColorBrush(&rgba(10, 10, 14, 0.35), None) } {
+                    unsafe {
+                        dc.FillRectangle(&capsule.to_d2d(), &wash_brush);
+                    }
+                }
+
+                unsafe {
+                    dc.PopLayer();
+                    drop(core::mem::ManuallyDrop::into_inner(params.geometricMask));
+                }
+            }
+        }
+    }
+
+    // 2. Mini Avatar GIF on the Left
+    let is_compact = capsule.w < 235.0;
+    let gif_s = if is_compact { 26.0 } else { 30.0 };
+    let gif_r = RectF {
+        x: capsule.x + 3.5,
+        y: capsule.y + (capsule.h - gif_s) * 0.5,
+        w: gif_s,
+        h: gif_s,
+    };
+    let avatar_radius = gif_s * 0.5;
+
+    let mut drew_avatar = false;
+    if view.config.ambient_mode == AmbientMode::Custom {
+        if let Some(anim) = view.gif_anim {
+            if !anim.frames.is_empty() {
+                let bmp = &anim.frames[view.gif_frame_index % anim.frames.len()].bitmap;
+                draw_cover_bitmap_rounded(dc, factory, bmp, gif_r, avatar_radius, 1.0)?;
+                drew_avatar = true;
+            }
+        }
+    }
+
+    if !drew_avatar {
+        if let Some(logo) = view.app_icon_logo {
+            draw_cover_bitmap_rounded(dc, factory, logo, gif_r, avatar_radius, 1.0)?;
+        } else {
+            draw_rounded_card(dc, gif_r, avatar_radius, hex_color(view.effective_accent, 0.85), rgba(255, 255, 255, 0.2), 1.0)?;
+        }
+    }
+
+    // Avatar outline ring
+    let ring_color = hex_color(view.effective_accent, 0.80);
+    let ring_brush = unsafe { dc.CreateSolidColorBrush(&ring_color, None) }?;
+    unsafe {
+        dc.DrawEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(gif_r.x + avatar_radius, gif_r.y + avatar_radius),
+                radiusX: avatar_radius,
+                radiusY: avatar_radius,
+            },
+            &ring_brush,
+            1.2,
+            None,
+        );
+    }
+
+    // 3. Timer Text & Phase Dot
+    let timer_str = if view.config.stealth_active && (view.hovered != Some(ControlId::BtnToggleStealthTimer) && !view.config.stealth_hover_peek) {
+        "••:••".to_string()
+    } else {
+        view.timer.formatted_time()
+    };
+    let timer_x = gif_r.x + gif_r.w + 4.0;
+    let timer_w = if is_compact { 40.0 } else { 48.0 };
+    let timer_r = RectF {
+        x: timer_x,
+        y: capsule.y + 4.0,
+        w: timer_w,
+        h: capsule.h - 8.0,
+    };
+    let phase_color = match view.timer.phase() {
+        SessionPhase::Focusing => rgba(52, 211, 153, 0.98),
+        SessionPhase::Resting => rgba(251, 146, 60, 0.98),
+        SessionPhase::Idle => rgba(156, 163, 175, 0.80),
+    };
+    let phase_brush = unsafe { dc.CreateSolidColorBrush(&phase_color, None) }?;
+    unsafe {
+        dc.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(timer_x + 1.0, capsule.y + capsule.h * 0.5),
+                radiusX: 2.2,
+                radiusY: 2.2,
+            },
+            &phase_brush,
+        );
+    }
+    let timer_font_size = if is_compact { 11.5 } else { 12.5 };
+    draw_text_shadow_nowrap(
+        dc,
+        dwrite,
+        &timer_str,
+        RectF { x: timer_x + 6.0, y: timer_r.y, w: timer_r.w - 6.0, h: timer_r.h },
+        timer_font_size,
+        DWRITE_FONT_WEIGHT_BOLD,
+        rgba(248, 248, 252, 0.98),
+        DWRITE_TEXT_ALIGNMENT_LEADING,
+    )?;
+
+    // 4. Middle Track Ticker or Phase Title
+    let btn_s = if is_compact { 16.0 } else { 18.0 };
+    let btn_gap = if is_compact { 2.0 } else { 3.0 };
+    let btn_margin = if is_compact { 5.0 } else { 8.0 };
+    let close_x = capsule.x + capsule.w - btn_margin - btn_s;
+    let pop_x = close_x - btn_gap - btn_s;
+    let style_x = pop_x - btn_gap - btn_s;
+    let pp_x = style_x - btn_gap - btn_s;
+
+    let ticker_x = timer_x + timer_r.w + 4.0;
+    let ticker_w = (pp_x - 4.0 - ticker_x).max(0.0);
+    let ticker_r = RectF {
+        x: ticker_x,
+        y: capsule.y + 4.0,
+        w: ticker_w,
+        h: capsule.h - 8.0,
+    };
+
+    if ticker_w > 12.0 {
+        if let Some(track) = view.track {
+            let ticker_text = format!("♪ {}", track.ticker_text());
+            draw_marquee_text(
+                dc,
+                dwrite,
+                &ticker_text,
+                ticker_r,
+                if is_compact { 9.5 } else { 10.0 },
+                DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                hex_color(view.effective_accent, 0.95),
+                view.marquee_offset,
+            )?;
+        } else {
+            let phase_label = match view.timer.phase() {
+                SessionPhase::Idle => "FocusGrow",
+                SessionPhase::Focusing => "Focus Session",
+                SessionPhase::Resting => "Rest & Relax",
+            };
+            draw_text_shadow_nowrap(
+                dc,
+                dwrite,
+                phase_label,
+                ticker_r,
+                if is_compact { 9.5 } else { 10.0 },
+                DWRITE_FONT_WEIGHT_MEDIUM,
+                rgba(200, 200, 212, 0.85),
+                DWRITE_TEXT_ALIGNMENT_LEADING,
+            )?;
+        }
+    }
+
+    // 5. Right Action Buttons on the Capsule
+    let play_icon = if view.timer.is_running() {
+        VectorIcon::PauseBars
+    } else {
+        VectorIcon::PlayTri
+    };
+    draw_vector_pill_fx(
+        dc,
+        factory,
+        find_hit(layout, ControlId::BtnPlayPause),
+        play_icon,
+        view.hovered == Some(ControlId::BtnPlayPause),
+        view.timer.is_running(),
+        view.effective_accent,
+    )?;
+
+    draw_vector_pill_fx(
+        dc,
+        factory,
+        find_hit(layout, ControlId::BtnTogglePipStyle),
+        VectorIcon::CapsulePill,
+        view.hovered == Some(ControlId::BtnTogglePipStyle),
+        false,
+        "#93C5FD",
+    )?;
+
+    draw_vector_pill_fx(
+        dc,
+        factory,
+        find_hit(layout, ControlId::BtnTogglePip),
+        VectorIcon::PopOut,
+        view.hovered == Some(ControlId::BtnTogglePip),
+        false,
+        view.effective_accent,
+    )?;
+
+    draw_vector_pill_fx(
+        dc,
+        factory,
+        find_hit(layout, ControlId::BtnClose),
+        VectorIcon::CloseSoft,
+        view.hovered == Some(ControlId::BtnClose),
+        false,
+        "#D4D4D8",
+    )?;
+
+    // 6. Floating Glass Under-Bar for YouTube Music Controls
+    let under_h = 24.0;
+    let under_y = capsule.y + capsule.h + 3.0;
+    let under_w = 136.0f32.min(capsule.w - 12.0).max(60.0);
+    let under_x = capsule.x + (capsule.w - under_w) * 0.5;
+    let under_rect = RectF {
+        x: under_x,
+        y: under_y,
+        w: under_w,
+        h: under_h,
+    };
+
+    draw_rounded_card(
+        dc,
+        under_rect,
+        under_h * 0.5,
+        rgba(14, 14, 18, 0.82),
+        rgba(255, 255, 255, 0.12),
+        0.8,
+    )?;
+
+    let btn_bg = rgba(255, 255, 255, 0.08);
+    let btn_border = rgba(255, 255, 255, 0.16);
+    let btn_fg = rgba(255, 255, 255, 0.92);
+
+    draw_icon_circle_button(
+        dc,
+        factory,
+        find_hit(layout, ControlId::BtnMediaPrev),
+        VectorIcon::SkipPrev,
+        btn_bg,
+        btn_border,
+        btn_fg,
+        view.hovered == Some(ControlId::BtnMediaPrev),
+    )?;
+
+    let pp_icon = if view.playback == PlaybackState::Playing {
+        VectorIcon::PauseBars
+    } else {
+        VectorIcon::PlayTri
+    };
+    draw_icon_circle_button(
+        dc,
+        factory,
+        find_hit(layout, ControlId::BtnMediaPlayPause),
+        pp_icon,
+        hex_color(view.effective_accent, 0.85),
+        rgba(0, 0, 0, 0.0),
+        contrast_fg(view.effective_accent),
+        view.hovered == Some(ControlId::BtnMediaPlayPause),
+    )?;
+
+    draw_icon_circle_button(
+        dc,
+        factory,
+        find_hit(layout, ControlId::BtnMediaNext),
+        VectorIcon::SkipNext,
+        btn_bg,
+        btn_border,
+        btn_fg,
+        view.hovered == Some(ControlId::BtnMediaNext),
+    )?;
+
+    draw_icon_circle_button(
+        dc,
+        factory,
+        find_hit(layout, ControlId::BtnMediaToggleWindow),
+        VectorIcon::Headphones,
+        btn_bg,
+        btn_border,
+        btn_fg,
+        view.hovered == Some(ControlId::BtnMediaToggleWindow),
+    )?;
 
     Ok(())
 }
@@ -3538,20 +4075,85 @@ fn draw_settings_pip(
 ) -> Result<()> {
     let w = (body.w - 10.0).max(200.0);
     let mut y = body.y - view.settings_scroll;
+
+    draw_text_nowrap(dc, dwrite, "PiP Window Format", RectF { x: body.x, y, w, h: 16.0 }, 11.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, rgba(225, 225, 236, 0.94), DWRITE_TEXT_ALIGNMENT_LEADING)?;
+    let sw_mode = (w - 10.0) * 0.5;
+    draw_segment_button(dc, dwrite, Some(RectF { x: body.x, y: y + 20.0, w: sw_mode, h: 30.0 }), "Standard Card", view.config.pip_style == PipStyle::Card, view.hovered == Some(ControlId::BtnPipStyleCard), view.effective_accent)?;
+    draw_segment_button(dc, dwrite, Some(RectF { x: body.x + sw_mode + 10.0, y: y + 20.0, w: sw_mode, h: 30.0 }), "Dynamic Capsule", view.config.pip_style == PipStyle::Capsule, view.hovered == Some(ControlId::BtnPipStyleCapsule), view.effective_accent)?;
+    y += 60.0;
+
+    if view.config.pip_style == PipStyle::Capsule {
+        draw_setting_card_row(
+            dc,
+            dwrite,
+            RectF { x: body.x, y, w, h: 48.0 },
+            "Center Album Artwork",
+            "Display YouTube Music album art in the middle of the capsule",
+            Some(view.config.pip_capsule_album_bg),
+            None,
+            view.hovered == Some(ControlId::BtnToggleCapsuleAlbumBg),
+            view.effective_accent,
+        )?;
+        y += 54.0;
+
+        if view.config.pip_capsule_album_bg {
+            draw_setting_card_row(
+                dc,
+                dwrite,
+                RectF { x: body.x, y, w, h: 48.0 },
+                "Spinning Disc (Vinyl Effect)",
+                "Smoothly rotate album art like a spinning vinyl disc",
+                Some(view.config.pip_capsule_album_spin),
+                None,
+                view.hovered == Some(ControlId::BtnToggleCapsuleAlbumSpin),
+                view.effective_accent,
+            )?;
+            y += 54.0;
+
+            draw_setting_card_row(
+                dc,
+                dwrite,
+                RectF { x: body.x, y, w, h: 48.0 },
+                "Album Art Transparency",
+                "Adjust background artwork opacity (click to cycle)",
+                None,
+                Some(&format!("{}%", view.config.pip_capsule_album_opacity)),
+                view.hovered == Some(ControlId::BtnCapsuleAlbumOpacity),
+                view.effective_accent,
+            )?;
+            y += 54.0;
+        }
+    }
+
     let rows = [
         (ControlId::BtnToggleAutoPip, "Auto-PIP on Session Start", "Automatically transforms into floating PiP when focus session begins", view.config.auto_pip),
         (ControlId::BtnToggleAutoPipBlur, "Auto-PIP on Blur (Click Outside)", "Switches to floating PiP when window loses focus during a session", view.config.auto_pip_on_blur),
         (ControlId::BtnToggleHideTaskbarInPip, "Hide Taskbar Icon in PiP", "Keep your Windows taskbar ultra-clean while in PiP mini mode", view.config.hide_taskbar_in_pip),
-        (ControlId::BtnTogglePeekingVinyl, "Peeking Vinyl in PiP Mode", "Spinning vinyl sleeve smoothly pokes out behind the floating card", view.config.pip_peeking_vinyl_enabled),
     ];
     for (id, title, sub, enabled) in rows {
         draw_setting_card_row(dc, dwrite, RectF { x: body.x, y, w, h: 48.0 }, title, sub, Some(enabled), None, view.hovered == Some(id), view.effective_accent)?;
         y += 54.0;
     }
-    draw_text_nowrap(dc, dwrite, "Vinyl Peeking Side", RectF { x: body.x, y, w, h: 16.0 }, 11.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, rgba(225, 225, 236, 0.94), DWRITE_TEXT_ALIGNMENT_LEADING)?;
-    let sw = (w - 10.0) * 0.5;
-    draw_segment_button(dc, dwrite, Some(RectF { x: body.x, y: y + 20.0, w: sw, h: 30.0 }), "Left", view.config.pip_peeking_vinyl_side == VinylSide::Left, view.hovered == Some(ControlId::BtnVinylSideLeft), view.effective_accent)?;
-    draw_segment_button(dc, dwrite, Some(RectF { x: body.x + sw + 10.0, y: y + 20.0, w: sw, h: 30.0 }), "Right", view.config.pip_peeking_vinyl_side == VinylSide::Right, view.hovered == Some(ControlId::BtnVinylSideRight), view.effective_accent)?;
+
+    if view.config.pip_style == PipStyle::Card {
+        draw_setting_card_row(
+            dc,
+            dwrite,
+            RectF { x: body.x, y, w, h: 48.0 },
+            "Peeking Vinyl in PiP Mode",
+            "Spinning vinyl sleeve smoothly pokes out behind the floating card",
+            Some(view.config.pip_peeking_vinyl_enabled),
+            None,
+            view.hovered == Some(ControlId::BtnTogglePeekingVinyl),
+            view.effective_accent,
+        )?;
+        y += 54.0;
+
+        draw_text_nowrap(dc, dwrite, "Vinyl Peeking Side", RectF { x: body.x, y, w, h: 16.0 }, 11.5, DWRITE_FONT_WEIGHT_SEMI_BOLD, rgba(225, 225, 236, 0.94), DWRITE_TEXT_ALIGNMENT_LEADING)?;
+        let sw = (w - 10.0) * 0.5;
+        draw_segment_button(dc, dwrite, Some(RectF { x: body.x, y: y + 20.0, w: sw, h: 30.0 }), "Left", view.config.pip_peeking_vinyl_side == VinylSide::Left, view.hovered == Some(ControlId::BtnVinylSideLeft), view.effective_accent)?;
+        draw_segment_button(dc, dwrite, Some(RectF { x: body.x + sw + 10.0, y: y + 20.0, w: sw, h: 30.0 }), "Right", view.config.pip_peeking_vinyl_side == VinylSide::Right, view.hovered == Some(ControlId::BtnVinylSideRight), view.effective_accent)?;
+    }
     Ok(())
 }
 
@@ -7064,6 +7666,7 @@ enum VectorIcon {
     Close,
     CloseSoft,
     PipPop,
+    CapsulePill,
     PopOut,
     Target,
     Person,
@@ -7227,6 +7830,18 @@ fn draw_vector_icon(
                     radiusY: 1.2,
                 };
                 dc.FillRoundedRectangle(&inner, &brush);
+            }
+            VectorIcon::CapsulePill => {
+                let pill_w = (r * 2.2).max(12.0);
+                let pill_h = (r * 0.95).max(6.0);
+                let rr = D2D1_ROUNDED_RECT {
+                    rect: RectF { x: cx - pill_w * 0.5, y: cy - pill_h * 0.5, w: pill_w, h: pill_h }.to_d2d(),
+                    radiusX: pill_h * 0.5,
+                    radiusY: pill_h * 0.5,
+                };
+                dc.DrawRoundedRectangle(&rr, &brush, 1.35, stroke_opt);
+                let dot_r = (pill_h * 0.28).max(1.5);
+                dc.FillEllipse(&D2D1_ELLIPSE { point: pt(cx - pill_w * 0.5 + pill_h * 0.5, cy), radiusX: dot_r, radiusY: dot_r }, &brush);
             }
             VectorIcon::Headphones => {
                 let arch_r = (r * 0.95).max(4.2);
@@ -8912,6 +9527,26 @@ mod tests {
             layout.hit_test(next.x + next.w * 0.5, next.y + next.h * 0.5),
             Some(ControlId::BtnMediaNext)
         );
+    }
+
+    #[test]
+    fn pip_capsule_hit_test_returns_controls_and_underbar() {
+        let mut cfg = AppConfig::default();
+        cfg.pip_mode = true;
+        cfg.pip_style = PipStyle::Capsule;
+        let mut q = base_query(280.0, 68.0, &cfg);
+        q.has_track = true;
+        q.phase = SessionPhase::Focusing;
+        let layout = compute_layout(&q);
+
+        assert!(layout.hit_rects.iter().any(|h| h.id == ControlId::BtnPlayPause));
+        assert!(layout.hit_rects.iter().any(|h| h.id == ControlId::BtnTogglePipStyle));
+        assert!(layout.hit_rects.iter().any(|h| h.id == ControlId::BtnTogglePip));
+        assert!(layout.hit_rects.iter().any(|h| h.id == ControlId::BtnClose));
+        assert!(layout.hit_rects.iter().any(|h| h.id == ControlId::BtnMediaPrev));
+        assert!(layout.hit_rects.iter().any(|h| h.id == ControlId::BtnMediaPlayPause));
+        assert!(layout.hit_rects.iter().any(|h| h.id == ControlId::BtnMediaNext));
+        assert!(layout.hit_rects.iter().any(|h| h.id == ControlId::DragBar));
     }
 
     #[test]

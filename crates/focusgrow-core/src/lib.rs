@@ -7,7 +7,7 @@ pub mod stats;
 pub mod timer;
 
 pub use config::{
-    AmbientConfig, AmbientMode, AmbientTrackConfig, AppConfig, GifDisplayMode, RecentGif,
+    AmbientConfig, AmbientMode, AmbientTrackConfig, AppConfig, GifDisplayMode, PipStyle, RecentGif,
     VinylSide,
 };
 pub use guard::{GuardState, NeutralOverstayEvent, NeutralOverstayTracker, RestrictedSiteState};

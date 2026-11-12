@@ -32,6 +32,15 @@ pub enum VinylSide {
     Right,
 }
 
+/// Floating Picture-in-Picture display format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum PipStyle {
+    #[default]
+    Card,
+    Capsule,
+}
+
 /// Metadata for a recently uploaded custom GIF stored locally.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecentGif {
@@ -304,8 +313,14 @@ pub struct AppConfig {
     pub custom_gif_name: String,
     pub recent_gifs: Vec<RecentGif>,
     pub pip_mode: bool,
+    pub pip_style: PipStyle,
     pub pip_width: i32,
     pub pip_height: i32,
+    pub pip_capsule_width: i32,
+    pub pip_capsule_height: i32,
+    pub pip_capsule_album_bg: bool,
+    pub pip_capsule_album_spin: bool,
+    pub pip_capsule_album_opacity: u8,
     pub pip_x: Option<i32>,
     pub pip_y: Option<i32>,
     pub hide_taskbar_in_pip: bool,
@@ -383,8 +398,14 @@ impl Default for AppConfig {
             custom_gif_name: String::new(),
             recent_gifs: Vec::new(),
             pip_mode: false,
+            pip_style: PipStyle::Card,
             pip_width: 195,
             pip_height: 280,
+            pip_capsule_width: 220,
+            pip_capsule_height: 68,
+            pip_capsule_album_bg: true,
+            pip_capsule_album_spin: true,
+            pip_capsule_album_opacity: 35,
             pip_x: None,
             pip_y: None,
             hide_taskbar_in_pip: false,
@@ -546,11 +567,14 @@ impl AppConfig {
         self.gif_opacity = self.gif_opacity.clamp(10, 100);
         self.pip_width = self.pip_width.clamp(150, 440);
         self.pip_height = self.pip_height.clamp(210, 550);
+        self.pip_capsule_width = self.pip_capsule_width.clamp(195, 520);
+        self.pip_capsule_height = self.pip_capsule_height.clamp(68, 120);
+        self.pip_capsule_album_opacity = self.pip_capsule_album_opacity.clamp(10, 100);
         self.dashboard_width = self.dashboard_width.clamp(760, 1920);
         self.dashboard_height = self.dashboard_height.clamp(520, 1200);
         self.daily_goal_minutes = self.daily_goal_minutes.clamp(15, 720);
         self.auto_pause_sec = self.auto_pause_sec.clamp(5, 600);
-        self.neutral_overstay_mins = self.neutral_overstay_mins.clamp(5, 120);
+        self.neutral_overstay_mins = self.neutral_overstay_mins.clamp(2, 120);
         self.prayer_advance_mins = self.prayer_advance_mins.clamp(1, 30);
         self.prayer_tz = self.prayer_tz.clamp(-12, 14);
         self.vinyl_speed_sec = self.vinyl_speed_sec.clamp(1.0, 30.0);
@@ -611,6 +635,12 @@ impl AppConfig {
         {
             cfg.pip_width = 195;
             cfg.pip_height = 280;
+        }
+        if cfg.pip_capsule_width < 195 {
+            cfg.pip_capsule_width = 220;
+        }
+        if cfg.pip_capsule_height < 68 {
+            cfg.pip_capsule_height = 68;
         }
         cfg.sanitize();
         cfg

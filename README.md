@@ -1,7 +1,7 @@
 # 🪴 FocusGrow
 
 <p align="center">
-  <img src="../ui/icon.png" width="88" height="88" alt="FocusGrow Logo" /><br>
+  <img src="ui/icon.png" width="88" height="88" alt="FocusGrow Logo" /><br>
   <b>A lightweight, hardware-accelerated Windows desktop productivity suite featuring Dual Focus modes, real-time app &amp; website blocking, YouTube Music vinyl sync, offline procedural soundscapes, automated prayer times schedule enforcement, and productivity analytics.</b>
 </p>
 
@@ -27,13 +27,13 @@
 
 ---
 
-### 2. Floating PiP Mini Widget, Peeking Vinyl & Sprout Growth
-| Compact Floating PiP | Peeking Vinyl Companion | Sprout Plant Growth |
-| :---: | :---: | :---: |
-| <img src="docs/screenshots/pip_compact_widget.png" height="240" alt="Compact PiP Widget" /> | <img src="../docs/screenshots/peeking_vinyl_companion.png" height="240" alt="Peeking Vinyl Companion" /> | <img src="../docs/screenshots/sprout_focus_session.png" height="240" alt="Sprout Focus Mode" /> |
+### 2. Floating PiP Mini Widget, Dynamic Capsule, Peeking Vinyl & Sprout Growth
+| Standard Card PiP | Dynamic Island Capsule (Glass) | Rotating Album Art Capsule | Peeking Vinyl Companion |
+| :---: | :---: | :---: | :---: |
+| <img src="docs/screenshots/pip_compact_widget.png" height="190" alt="Compact Card PiP" /> | <img src="docs/screenshots/pip_capsule_minimal.png" height="190" alt="Dynamic Capsule Minimal" /> | <img src="docs/screenshots/pip_capsule_spinning_art.png" height="190" alt="Rotating Album Art Capsule" /> | <img src="docs/screenshots/peeking_vinyl_companion.png" height="190" alt="Peeking Vinyl Companion" /> |
 
 <p align="center">
-  <i>Always-on-top Picture-in-Picture mini timer with live YouTube Music ticker, desktop-transparent Peeking Vinyl sleeve, and vector Sprout Plant Growth mode.</i>
+  <i>Always-on-top Picture-in-Picture mini timer with live YouTube Music ticker, resizable Dynamic Island Capsule with rotating album art backdrop, desktop-transparent Peeking Vinyl sleeve, and vector Sprout Plant Growth mode.</i>
 </p>
 
 ---
@@ -68,7 +68,7 @@
   <img src="docs/screenshots/productivity_flow_tooltip.png" width="90%" alt="24-Hour Productivity Flow Curve with Hover Tooltip" />
 </p>
 <p align="center">
-  <img src="../docs/screenshots/productivity_share_card.png" width="46%" alt="Focus Productivity Share Card" />
+  <img src="docs/screenshots/productivity_share_card.png" width="46%" alt="Focus Productivity Share Card" />
 </p>
 <p align="center">
   <b>Analytics &amp; Reporting:</b> Today / Yesterday / Week / Month / 3 Months periods, 34-week contribution heatmap, categorized app breakdown, 24-hour flow tooltips with app icons, and 1-click Share Card PNG / clipboard export.
@@ -78,12 +78,12 @@
 
 ### 5. Real-Time Blocker & Full-Screen Break Overlays
 <p align="center">
-  <img src="../docs/screenshots/restricted_app_warning.png" width="52%" alt="Restricted App Countdown Warning" />
+  <img src="docs/screenshots/restricted_app_warning.png" width="52%" alt="Restricted App Countdown Warning" />
   &nbsp;
-  <img src="../docs/screenshots/website_cooldown_blocker.png" width="43%" alt="Website Cooldown Blocker" />
+  <img src="docs/screenshots/website_cooldown_blocker.png" width="43%" alt="Website Cooldown Blocker" />
 </p>
 <p align="center">
-  <img src="../docs/screenshots/fullscreen_break_overlay.png" width="90%" alt="Full-Screen Break Overlay" />
+  <img src="docs/screenshots/fullscreen_break_overlay.png" width="90%" alt="Full-Screen Break Overlay" />
 </p>
 <p align="center">
   <i>Event-driven <code>SetWinEventHook</code> &amp; UI Automation distraction guard across single or all monitors, with 5-second close countdowns, emergency website passes, and multi-monitor rest/prayer locks.</i>

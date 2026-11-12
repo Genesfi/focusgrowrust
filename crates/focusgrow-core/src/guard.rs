@@ -355,7 +355,7 @@ impl NeutralOverstayTracker {
                     return NeutralOverstayEvent::None;
                 }
                 self.continuous_neutral_sec = self.continuous_neutral_sec.saturating_add(1);
-                let mins = config.neutral_overstay_mins.clamp(5, 120);
+                let mins = config.neutral_overstay_mins.clamp(2, 120);
                 let interval_sec = mins * 60;
                 if !self.warned_1x && self.continuous_neutral_sec >= interval_sec {
                     self.warned_1x = true;
