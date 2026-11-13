@@ -1658,21 +1658,40 @@ fn push_settings_tab_hits(
             }
         }
         SettingsTab::Session => {
-            let ids = [
-                ControlId::BtnToggleAutoPause,
-                ControlId::BtnAutoPauseThreshold,
-                ControlId::BtnToggleNeutralOverstay,
-                ControlId::BtnNeutralThreshold,
-                ControlId::BtnToggleNeutralSoftblock,
-                ControlId::BtnToggleAutoClose,
-                ControlId::BtnToggleBlockAllMonitors,
-            ];
             let mut y = body.y - scroll;
-            for id in ids {
-                push_modal_hit(body, hits, id, RectF { x: body.x, y, w: inner_w, h: 48.0 });
+            let mut count = 0;
+
+            push_modal_hit(body, hits, ControlId::BtnToggleAutoPause, RectF { x: body.x, y, w: inner_w, h: 48.0 });
+            y += 54.0;
+            count += 1;
+
+            if config.auto_pause_enabled {
+                push_modal_hit(body, hits, ControlId::BtnAutoPauseThreshold, RectF { x: body.x, y, w: inner_w, h: 48.0 });
                 y += 54.0;
+                count += 1;
             }
-            total_h = ids.len() as f32 * 54.0;
+
+            push_modal_hit(body, hits, ControlId::BtnToggleNeutralOverstay, RectF { x: body.x, y, w: inner_w, h: 48.0 });
+            y += 54.0;
+            count += 1;
+
+            if config.neutral_overstay_enabled {
+                push_modal_hit(body, hits, ControlId::BtnNeutralThreshold, RectF { x: body.x, y, w: inner_w, h: 48.0 });
+                y += 54.0;
+                count += 1;
+                push_modal_hit(body, hits, ControlId::BtnToggleNeutralSoftblock, RectF { x: body.x, y, w: inner_w, h: 48.0 });
+                y += 54.0;
+                count += 1;
+            }
+
+            push_modal_hit(body, hits, ControlId::BtnToggleAutoClose, RectF { x: body.x, y, w: inner_w, h: 48.0 });
+            y += 54.0;
+            count += 1;
+
+            push_modal_hit(body, hits, ControlId::BtnToggleBlockAllMonitors, RectF { x: body.x, y, w: inner_w, h: 48.0 });
+            count += 1;
+
+            total_h = count as f32 * 54.0;
         }
         SettingsTab::PipMode => {
             let mut y = body.y - scroll;
@@ -4357,17 +4376,74 @@ fn draw_settings_session(
 ) -> Result<()> {
     let w = (body.w - 10.0).max(200.0);
     let mut y = body.y - view.settings_scroll;
-    let rows = [
-        (ControlId::BtnToggleAutoPause, "Auto-pause on Inactivity", "Pauses focus timer if no keyboard or mouse activity is detected", Some(view.config.auto_pause_enabled), None),
-        (ControlId::BtnAutoPauseThreshold, "Inactivity Threshold", "Click to cycle time before auto-pausing active session", None, Some(format!("{}s", view.config.auto_pause_sec))),
-        (ControlId::BtnToggleNeutralOverstay, "Neutral App Overstay Guard", "Nudges you when spending too long in browsers or neutral apps", Some(view.config.neutral_overstay_enabled), None),
-        (ControlId::BtnNeutralThreshold, "Reminder Interval", "Frequency of neutral app check-in reminders (click to cycle)", None, Some(format!("{}m", view.config.neutral_overstay_mins))),
-        (ControlId::BtnToggleNeutralSoftblock, "Soft-Block on 2x Ignored", "Temporarily restricts screen if 2 check-ins are ignored", Some(view.config.neutral_softblock_enabled), None),
-        (ControlId::BtnToggleAutoClose, "Auto-Close Blocked Apps", "Gracefully closes forbidden apps after 5s warning during focus", Some(view.config.auto_close_blocked_apps), None),
-        (ControlId::BtnToggleBlockAllMonitors, "Block All Monitors", "Cover all displays when restricted (OFF: active monitor only)", Some(view.config.block_all_monitors), None),
-    ];
+
+    let mut rows: Vec<(ControlId, &str, &str, Option<bool>, Option<String>)> = Vec::new();
+    rows.push((
+        ControlId::BtnToggleAutoPause,
+        "Auto-pause on Inactivity",
+        "Pauses focus timer if no keyboard or mouse activity is detected",
+        Some(view.config.auto_pause_enabled),
+        None,
+    ));
+    if view.config.auto_pause_enabled {
+        rows.push((
+            ControlId::BtnAutoPauseThreshold,
+            "Inactivity Threshold",
+            "Click to cycle time before auto-pausing active session",
+            None,
+            Some(format!("{}s", view.config.auto_pause_sec)),
+        ));
+    }
+    rows.push((
+        ControlId::BtnToggleNeutralOverstay,
+        "Neutral App Overstay Guard",
+        "Nudges you when spending too long in browsers or neutral apps",
+        Some(view.config.neutral_overstay_enabled),
+        None,
+    ));
+    if view.config.neutral_overstay_enabled {
+        rows.push((
+            ControlId::BtnNeutralThreshold,
+            "Reminder Interval",
+            "Frequency of neutral app check-in reminders (click to cycle)",
+            None,
+            Some(format!("{}m", view.config.neutral_overstay_mins)),
+        ));
+        rows.push((
+            ControlId::BtnToggleNeutralSoftblock,
+            "Soft-Block on 2x Ignored",
+            "Temporarily restricts screen if 2 check-ins are ignored",
+            Some(view.config.neutral_softblock_enabled),
+            None,
+        ));
+    }
+    rows.push((
+        ControlId::BtnToggleAutoClose,
+        "Auto-Close Blocked Apps",
+        "Gracefully closes forbidden apps after 5s warning during focus",
+        Some(view.config.auto_close_blocked_apps),
+        None,
+    ));
+    rows.push((
+        ControlId::BtnToggleBlockAllMonitors,
+        "Block All Monitors",
+        "Cover all displays when restricted (OFF: active monitor only)",
+        Some(view.config.block_all_monitors),
+        None,
+    ));
+
     for (id, title, sub, toggle, badge) in rows {
-        draw_setting_card_row(dc, dwrite, RectF { x: body.x, y, w, h: 48.0 }, title, sub, toggle, badge.as_deref(), view.hovered == Some(id), view.effective_accent)?;
+        draw_setting_card_row(
+            dc,
+            dwrite,
+            RectF { x: body.x, y, w, h: 48.0 },
+            title,
+            sub,
+            toggle,
+            badge.as_deref(),
+            view.hovered == Some(id),
+            view.effective_accent,
+        )?;
         y += 54.0;
     }
     Ok(())
