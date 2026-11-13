@@ -2159,11 +2159,7 @@ fn render_pip_capsule_ui(
                 }
 
                 if view.config.pip_capsule_album_spin {
-                    let angle = if view.playback == PlaybackState::Playing {
-                        view.in_card_vinyl_angle
-                    } else {
-                        0.0
-                    };
+                    let angle = view.in_card_vinyl_angle;
                     let mut prev = Matrix3x2::identity();
                     unsafe {
                         dc.GetTransform(&mut prev);
@@ -2225,6 +2221,22 @@ fn render_pip_capsule_ui(
                 draw_cover_bitmap_rounded(dc, factory, bmp, gif_r, avatar_radius, 1.0)?;
                 drew_avatar = true;
             }
+        }
+    } else if view.config.ambient_mode == AmbientMode::YtMusic {
+        let disc_cx = gif_r.x + avatar_radius;
+        let disc_cy = gif_r.y + avatar_radius;
+        let angle = view.in_card_vinyl_angle;
+        if draw_vinyl_disc(
+            dc,
+            disc_cx,
+            disc_cy,
+            avatar_radius,
+            angle,
+            view.cover_bitmap,
+            view.config.show_vinyl_spindle,
+            view.effective_accent,
+        ).is_ok() {
+            drew_avatar = true;
         }
     }
 

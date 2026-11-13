@@ -436,12 +436,15 @@ fn handle_parsed_message(
     parsed: ParsedWsMessage,
     updates: &Arc<Mutex<VecDeque<YtmpxUpdate>>>,
     cover_tx: &mpsc::Sender<String>,
-    _last_art_url: &mut String,
+    last_art_url: &mut String,
 ) {
     match parsed {
         ParsedWsMessage::Track { track, playback } => {
-            if !track.art_url.is_empty() {
+            if !track.art_url.is_empty() && *last_art_url != track.art_url {
+                *last_art_url = track.art_url.clone();
                 let _ = cover_tx.send(track.art_url.clone());
+            } else if track.art_url.is_empty() {
+                last_art_url.clear();
             }
             push_update(
                 hwnd_raw,

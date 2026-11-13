@@ -170,6 +170,13 @@ enum PrayerResumeAction {
     ResumeCurrent,
 }
 
+fn trim_working_set() {
+    unsafe {
+        use windows::Win32::System::Threading::{GetCurrentProcess, SetProcessWorkingSetSize};
+        let _ = SetProcessWorkingSetSize(GetCurrentProcess(), usize::MAX, usize::MAX);
+    }
+}
+
 struct AppState {
     hwnd: HWND,
     surface: DCompSurface,
@@ -209,6 +216,7 @@ struct AppState {
     frame_idx: usize,
     cover_frame: Option<DecodedFrame>,
     cover_bitmap: Option<ID2D1Bitmap1>,
+    cover_art_url: Option<String>,
     cached_dynamic_accent: Option<String>,
     track: Option<TrackInfo>,
     playback: PlaybackState,
@@ -252,6 +260,7 @@ struct AppState {
     stats_period: StatsPeriod,
     heatmap_offset_months: usize,
     session_save_tick: u8,
+    periodic_trim_tick: u8,
     prayer_view_idx: Option<usize>,
     show_pip_gif_drawer: bool,
     hovered: Option<ControlId>,
@@ -1419,8 +1428,8 @@ impl AppState {
             if self.config.notifications_enabled {
                 if completed_phase == SessionPhase::Focusing {
                     self.audio.play_notification(
-                        &self.config.focus_sound,
-                        self.config.custom_focus_audio_path.as_deref(),
+                        &self.config.break_sound,
+                        self.config.custom_break_audio_path.as_deref(),
                     );
                     if self.timer.phase() == SessionPhase::Resting {
                         if self.config.is_health_mode {
@@ -1442,8 +1451,8 @@ impl AppState {
                     }
                 } else if completed_phase == SessionPhase::Resting {
                     self.audio.play_notification(
-                        &self.config.break_sound,
-                        self.config.custom_break_audio_path.as_deref(),
+                        &self.config.focus_sound,
+                        self.config.custom_focus_audio_path.as_deref(),
                     );
                     if self.timer.phase() == SessionPhase::Focusing {
                         self.notify_windows(
@@ -1625,6 +1634,10 @@ impl AppState {
                 if self.session_save_tick == 0 {
                     self.persist_session_now();
                 }
+            }
+            self.periodic_trim_tick = (self.periodic_trim_tick + 1) % 60;
+            if self.periodic_trim_tick == 0 {
+                trim_working_set();
             }
 
             self.guard.tick_passes_one_second();
@@ -1810,7 +1823,7 @@ impl AppState {
     }
 
     fn marquee_animating(&self) -> bool {
-        self.track.is_some() && self.settings_tab.is_none()
+        self.track.is_some() && self.settings_tab.is_none() && self.playback == PlaybackState::Playing
     }
 
     fn icon_spin_animating(&self) -> bool {
@@ -1852,7 +1865,7 @@ impl AppState {
         }
         unsafe {
             if active {
-                SetTimer(Some(self.hwnd), TIMER_VINYL_ID, 20, None);
+                SetTimer(Some(self.hwnd), TIMER_VINYL_ID, 33, None);
             } else {
                 let _ = KillTimer(Some(self.hwnd), TIMER_VINYL_ID);
             }
@@ -2320,41 +2333,57 @@ impl AppState {
                         }
                     }
 
-                    let _prev_art = self.track.as_ref().map(|t| t.art_url.clone()).unwrap_or_default();
+                    let prev_art = self.track.as_ref().map(|t| t.art_url.clone()).unwrap_or_default();
                     let prev_title = self.track.as_ref().map(|t| t.title.clone()).unwrap_or_default();
+                    let prev_artist = self.track.as_ref().map(|t| t.artist.clone()).unwrap_or_default();
                     let next_art = track.as_ref().map(|t| t.art_url.clone()).unwrap_or_default();
                     let next_title = track.as_ref().map(|t| t.title.clone()).unwrap_or_default();
-                    if prev_title != next_title {
-                        self.marquee_offset = 0.0;
-                    }
-                    self.track = track;
-                    self.playback = playback;
-                    if self.track.is_none() || next_art.is_empty() {
-                        self.cover_frame = None;
-                        self.cover_bitmap = None;
-                        self.cached_dynamic_accent = None;
-                        if let Some(ref mut v) = self.peeking_vinyl {
-                            v.set_cover_frame(None, false);
+                    let next_artist = track.as_ref().map(|t| t.artist.clone()).unwrap_or_default();
+
+                    let same_track = self.track.is_some()
+                        && track.is_some()
+                        && prev_title == next_title
+                        && prev_artist == next_artist
+                        && prev_art == next_art;
+
+                    if !same_track {
+                        if prev_title != next_title {
+                            self.marquee_offset = 0.0;
                         }
-                    }
-                    need_redraw = true;
-                    need_vinyl_sync = true;
-                }
-                YtmpxUpdate::PlaybackChanged { playback, from_smtc } => {
-                    let is_current_from_smtc = self.track.as_ref().is_some_and(|t| t.art_url.starts_with("smtc://"));
-                    if self.track.is_none() || from_smtc == is_current_from_smtc {
-                        self.playback = playback;
-                        if playback == PlaybackState::Stopped {
-                            self.track = None;
+                        self.track = track;
+                        if self.track.is_none() || next_art.is_empty() {
                             self.cover_frame = None;
                             self.cover_bitmap = None;
+                            self.cover_art_url = None;
                             self.cached_dynamic_accent = None;
                             if let Some(ref mut v) = self.peeking_vinyl {
                                 v.set_cover_frame(None, false);
                             }
                         }
-                        need_redraw = true;
-                        need_vinyl_sync = true;
+                    }
+
+                    let playback_changed = self.playback != playback;
+                    self.playback = playback;
+                    need_redraw = !same_track || playback_changed;
+                    need_vinyl_sync = !same_track || playback_changed;
+                }
+                YtmpxUpdate::PlaybackChanged { playback, from_smtc } => {
+                    let is_current_from_smtc = self.track.as_ref().is_some_and(|t| t.art_url.starts_with("smtc://"));
+                    if self.track.is_none() || from_smtc == is_current_from_smtc {
+                        let playback_changed = self.playback != playback;
+                        self.playback = playback;
+                        if playback == PlaybackState::Stopped {
+                            self.track = None;
+                            self.cover_frame = None;
+                            self.cover_bitmap = None;
+                            self.cover_art_url = None;
+                            self.cached_dynamic_accent = None;
+                            if let Some(ref mut v) = self.peeking_vinyl {
+                                v.set_cover_frame(None, false);
+                            }
+                        }
+                        need_redraw = playback_changed;
+                        need_vinyl_sync = playback_changed;
                     }
                 }
                 YtmpxUpdate::CoverLoaded { art_url, frame } => {
@@ -2365,6 +2394,11 @@ impl AppState {
                     if !matches_current && self.track.is_none() {
                         continue;
                     }
+                    if self.cover_art_url.as_deref() == Some(&art_url) && self.cover_bitmap.is_some() {
+                        // Already loaded this exact cover; do not re-upload or trigger tuck animation
+                        continue;
+                    }
+                    self.cover_art_url = Some(art_url.clone());
                     self.cover_frame = frame.clone();
                     self.cover_bitmap = frame
                         .as_ref()
@@ -3219,6 +3253,12 @@ impl AppState {
                 if starting_idle {
                     self.warned_5m_phase = None;
                     self.warned_1m_phase = None;
+                    if self.config.notifications_enabled {
+                        self.audio.play_notification(
+                            &self.config.focus_sound,
+                            self.config.custom_focus_audio_path.as_deref(),
+                        );
+                    }
                     if self.config.is_health_mode {
                         self.notify_windows(
                             "Posture Guard Started",
@@ -3432,6 +3472,9 @@ impl AppState {
             ControlId::BtnAmbientDefault => {
                 self.config.ambient_mode = AmbientMode::Default;
                 let _ = self.config.save();
+                self.gpu_anim = None;
+                self.loaded_gif_path = None;
+                trim_working_set();
                 self.load_active_gif();
                 self.sync_vinyl_timer();
                 self.request_redraw();
@@ -3439,6 +3482,9 @@ impl AppState {
             ControlId::BtnAmbientYtMusic => {
                 self.config.ambient_mode = AmbientMode::YtMusic;
                 let _ = self.config.save();
+                self.gpu_anim = None;
+                self.loaded_gif_path = None;
+                trim_working_set();
                 self.load_active_gif();
                 self.last_vinyl_tick = Instant::now();
                 self.sync_vinyl_timer();
@@ -4775,6 +4821,7 @@ fn run_app() -> Result<()> {
         frame_idx: 0,
         cover_frame: None,
         cover_bitmap: None,
+        cover_art_url: None,
         cached_dynamic_accent: None,
         track: None,
         playback: PlaybackState::Stopped,
@@ -4818,6 +4865,7 @@ fn run_app() -> Result<()> {
         stats_period: StatsPeriod::Today,
         heatmap_offset_months: 0,
         session_save_tick: 0,
+        periodic_trim_tick: 0,
         prayer_view_idx: None,
         show_pip_gif_drawer: false,
         hovered: None,
