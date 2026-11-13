@@ -1,5 +1,8 @@
+use focusgrow_core::AppConfig;
 use focusgrow_gfx::{decode_hicon_to_frame, DecodedFrame};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
 use std::sync::atomic::{AtomicIsize, Ordering};
 use windows::core::{BOOL, HSTRING, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, TRUE, WPARAM};
@@ -345,4 +348,169 @@ pub fn close_window_gracefully(hwnd_raw: isize) -> bool {
         }
         wm_ok
     }
+}
+
+/// Saves a decoded BGRA8 icon frame to disk cache: `%LOCALAPPDATA%\FocusGrow\icon_cache\<exe_low>.bin`.
+pub fn save_icon_cache(exe_low: &str, frame: &DecodedFrame) {
+    if exe_low.is_empty() || frame.width == 0 || frame.height == 0 || frame.pixels_pbgra.is_empty() {
+        return;
+    }
+    let dir = AppConfig::icon_cache_dir();
+    let _ = fs::create_dir_all(&dir);
+    let path = dir.join(format!("{exe_low}.bin"));
+    let mut data = Vec::with_capacity(8 + frame.pixels_pbgra.len());
+    data.extend_from_slice(&frame.width.to_le_bytes());
+    data.extend_from_slice(&frame.height.to_le_bytes());
+    data.extend_from_slice(&frame.pixels_pbgra);
+    let _ = fs::write(path, data);
+}
+
+/// Loads a decoded BGRA8 icon frame from disk cache.
+pub fn load_icon_cache(exe_low: &str) -> Option<DecodedFrame> {
+    let path = AppConfig::icon_cache_dir().join(format!("{exe_low}.bin"));
+    let bytes = fs::read(path).ok()?;
+    if bytes.len() < 8 {
+        return None;
+    }
+    let width = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let height = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    let expected = (width as usize) * (height as usize) * 4;
+    if bytes.len() != 8 + expected {
+        return None;
+    }
+    Some(DecodedFrame {
+        width,
+        height,
+        delay_ms: 0,
+        pixels_pbgra: bytes[8..].to_vec(),
+    })
+}
+
+/// Loads all cached icon frames from disk on application startup.
+pub fn load_all_cached_icons() -> Vec<(String, DecodedFrame)> {
+    let dir = AppConfig::icon_cache_dir();
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut list = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("bin") {
+            if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                if let Some(frame) = load_icon_cache(stem) {
+                    list.push((stem.to_ascii_lowercase(), frame));
+                }
+            }
+        }
+    }
+    list
+}
+
+/// Remembers a known executable's full on-disk path (e.g. `Spotify.exe` -> `C:\Users\...\Spotify.exe`).
+pub fn record_known_app_path(exe_name: &str, exe_path: &str) {
+    if exe_name.is_empty() || exe_path.is_empty() {
+        return;
+    }
+    let p = AppConfig::known_apps_path();
+    let mut map: HashMap<String, String> = fs::read_to_string(&p)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    let low = exe_name.to_ascii_lowercase();
+    if map.get(&low).map(|s| s.as_str()) != Some(exe_path) {
+        map.insert(low, exe_path.to_string());
+        if let Ok(json) = serde_json::to_string_pretty(&map) {
+            let _ = fs::write(p, json);
+        }
+    }
+}
+
+/// Resolves an app's on-disk executable path even when the app is NOT currently running.
+pub fn resolve_app_exe_path(exe_name: &str) -> Option<String> {
+    let low = exe_name.to_ascii_lowercase();
+    // 1. Check known_app_paths.json
+    let p = AppConfig::known_apps_path();
+    if let Ok(raw) = fs::read_to_string(&p) {
+        if let Ok(map) = serde_json::from_str::<HashMap<String, String>>(&raw) {
+            if let Some(path) = map.get(&low) {
+                if Path::new(path).exists() {
+                    return Some(path.clone());
+                }
+            }
+        }
+    }
+
+    // 2. Check Windows Registry App Paths: HKCU & HKLM \SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\<exe_name>
+    for hkey in [
+        windows::Win32::System::Registry::HKEY_CURRENT_USER,
+        windows::Win32::System::Registry::HKEY_LOCAL_MACHINE,
+    ] {
+        let subkey = format!("SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\{}", exe_name);
+        let wide_sub = HSTRING::from(subkey);
+        let mut key_handle = windows::Win32::System::Registry::HKEY::default();
+        unsafe {
+            if windows::Win32::System::Registry::RegOpenKeyExW(
+                hkey,
+                &wide_sub,
+                None,
+                windows::Win32::System::Registry::KEY_READ,
+                &mut key_handle,
+            )
+            .is_ok()
+            {
+                let mut buf = [0u16; 512];
+                let mut cb_size = (buf.len() * 2) as u32;
+                let res = windows::Win32::System::Registry::RegQueryValueExW(
+                    key_handle,
+                    None,
+                    None,
+                    None,
+                    Some(buf.as_mut_ptr() as *mut _),
+                    Some(&mut cb_size),
+                );
+                let _ = windows::Win32::System::Registry::RegCloseKey(key_handle);
+                if res.is_ok() {
+                    let path_str = String::from_utf16_lossy(&buf[..(cb_size as usize / 2).saturating_sub(1)])
+                        .trim_matches('"')
+                        .to_string();
+                    if Path::new(&path_str).exists() {
+                        return Some(path_str);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. Check common user install paths (e.g. WindowsApps, AppData, Office, Program Files)
+    let mut candidates = Vec::new();
+    if let Ok(local) = std::env::var("LOCALAPPDATA") {
+        let base = Path::new(&local);
+        candidates.push(base.join("Microsoft").join("WindowsApps").join(exe_name));
+        candidates.push(base.join("Programs").join(exe_name));
+        candidates.push(base.join("Discord").join(exe_name));
+        candidates.push(base.join("Spotify").join(exe_name));
+    }
+    if let Ok(appdata) = std::env::var("APPDATA") {
+        let base = Path::new(&appdata);
+        candidates.push(base.join("Spotify").join(exe_name));
+    }
+    if let Ok(pf) = std::env::var("ProgramFiles") {
+        let base = Path::new(&pf);
+        candidates.push(base.join("Microsoft Office").join("root").join("Office16").join(exe_name));
+        candidates.push(base.join("Microsoft Office").join("Office16").join(exe_name));
+        candidates.push(base.join(exe_name));
+    }
+    if let Ok(pfx86) = std::env::var("ProgramFiles(x86)") {
+        let base = Path::new(&pfx86);
+        candidates.push(base.join("Microsoft Office").join("root").join("Office16").join(exe_name));
+        candidates.push(base.join("Microsoft Office").join("Office16").join(exe_name));
+        candidates.push(base.join(exe_name));
+    }
+
+    for c in candidates {
+        if c.exists() {
+            return Some(c.to_string_lossy().to_string());
+        }
+    }
+    None
 }

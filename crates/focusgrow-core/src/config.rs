@@ -515,11 +515,23 @@ pub fn default_app_category(exe_name: &str) -> &'static str {
         | "windowsterminal.exe"
         | "powershell.exe"
         | "cmd.exe"
+        | "winword.exe"
         | "word.exe"
         | "excel.exe"
         | "powerpnt.exe"
+        | "onenote.exe"
+        | "outlook.exe"
+        | "acrobat.exe"
         | "notion.exe"
         | "obsidian.exe"
+        | "explorer.exe"
+        | "searchhost.exe"
+        | "searchapp.exe"
+        | "shellexperiencehost.exe"
+        | "startmenuexperiencehost.exe"
+        | "systemsettings.exe"
+        | "taskmgr.exe"
+        | "snippingtool.exe"
         | "focusgrow.exe"
         | "focusgrow-app.exe" => "productive",
         "steam.exe"
@@ -622,6 +634,14 @@ impl AppConfig {
 
     pub fn sounds_dir() -> PathBuf {
         Self::data_dir().join("sounds")
+    }
+
+    pub fn icon_cache_dir() -> PathBuf {
+        Self::data_dir().join("icon_cache")
+    }
+
+    pub fn known_apps_path() -> PathBuf {
+        Self::data_dir().join("known_app_paths.json")
     }
 
     /// Loads config from the default path, returning defaults if absent or unreadable.

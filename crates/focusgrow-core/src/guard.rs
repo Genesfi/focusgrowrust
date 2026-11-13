@@ -341,6 +341,7 @@ impl NeutralOverstayTracker {
             || lower == "focusgrow.exe"
             || lower == "focusgrow_app.exe"
             || lower == "focusgrow-app.exe"
+            || SYSTEM_WHITELIST.iter().any(|w| *w == lower)
         {
             return NeutralOverstayEvent::None;
         }

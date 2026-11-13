@@ -17,7 +17,8 @@ use anyhow::Result;
 use focusgrow_audio::{next_sound_style, AudioEngine, AMBIENT_PRESETS, AMBIENT_TRACKS};
 use app_guard::{
     close_window_gracefully, enumerate_running_apps, extract_app_icon_frame, inspect_window,
-    system_idle_seconds, ForegroundAppInfo, ForegroundHook, WM_FOREGROUND_APP,
+    load_all_cached_icons, load_icon_cache, record_known_app_path, resolve_app_exe_path,
+    save_icon_cache, system_idle_seconds, ForegroundAppInfo, ForegroundHook, WM_FOREGROUND_APP,
 };
 use focusgrow_core::gif_store::{
     import_gif_into_store, remove_recent_gif, resolve_active_gif_path, select_recent_gif,
@@ -1031,8 +1032,12 @@ impl AppState {
         }
         if let Some(info) = inspect_window(fg) {
             let exe_low = info.exe_name.to_ascii_lowercase();
+            if !info.exe_path.is_empty() {
+                record_known_app_path(&info.exe_name, &info.exe_path);
+            }
             if !exe_low.is_empty() && !self.app_icons_by_exe.contains_key(&exe_low) {
                 if let Some(frame) = extract_app_icon_frame(info.hwnd_raw, &info.exe_path) {
+                    save_icon_cache(&exe_low, &frame);
                     if let Ok(bmp) = upload_frame_bitmap(&self.surface.d2d_context, &frame) {
                         self.app_icons_by_exe.insert(exe_low, bmp);
                     }
@@ -1192,6 +1197,13 @@ impl AppState {
         }
 
         self.refresh_prayer_schedule();
+        for (exe_low, frame) in load_all_cached_icons() {
+            if !self.app_icons_by_exe.contains_key(&exe_low) {
+                if let Ok(bmp) = upload_frame_bitmap(&self.surface.d2d_context, &frame) {
+                    self.app_icons_by_exe.insert(exe_low, bmp);
+                }
+            }
+        }
         let bridge_port = self
             .http_bridge
             .as_ref()
@@ -1725,10 +1737,14 @@ impl AppState {
                 app.exe_path.to_ascii_lowercase()
             };
             let exe_low = app.exe_name.to_ascii_lowercase();
+            if !app.exe_path.is_empty() {
+                record_known_app_path(&app.exe_name, &app.exe_path);
+            }
             let need_key = !self.app_icons.contains_key(&key);
             let need_exe = !exe_low.is_empty() && !self.app_icons_by_exe.contains_key(&exe_low);
             if need_key || need_exe {
                 if let Some(frame) = extract_app_icon_frame(app.hwnd_raw, &app.exe_path) {
+                    save_icon_cache(&exe_low, &frame);
                     if need_key {
                         if let Ok(bmp) = upload_frame_bitmap(&self.surface.d2d_context, &frame) {
                             self.app_icons.insert(key, bmp);
@@ -1946,6 +1962,34 @@ impl AppState {
                 eprintln!("[FocusGrow] render error: {err:?}");
             }
         });
+    }
+
+    fn ensure_stats_icons(&mut self) {
+        let (today_date, ..) = local_date_and_hour();
+        let stats_raw = period_app_breakdown(&self.stats, &today_date, self.stats_period);
+        for (exe, _) in stats_raw {
+            let low = exe.to_ascii_lowercase();
+            if low.is_empty() || low == "focusgrow.exe" || low == "focusgrow-app.exe" || self.app_icons_by_exe.contains_key(&low) {
+                continue;
+            }
+            // 1. Try disk cache
+            if let Some(frame) = load_icon_cache(&low) {
+                if let Ok(bmp) = upload_frame_bitmap(&self.surface.d2d_context, &frame) {
+                    self.app_icons_by_exe.insert(low.clone(), bmp);
+                    continue;
+                }
+            }
+            // 2. Try resolving on-disk executable path (WindowsApps, App Paths, Program Files, Office)
+            if let Some(path) = resolve_app_exe_path(&exe) {
+                record_known_app_path(&exe, &path);
+                if let Some(frame) = extract_app_icon_frame(0, &path) {
+                    save_icon_cache(&low, &frame);
+                    if let Ok(bmp) = upload_frame_bitmap(&self.surface.d2d_context, &frame) {
+                        self.app_icons_by_exe.insert(low, bmp);
+                    }
+                }
+            }
+        }
     }
 
     fn build_stats_apps<'a>(&'a self, stats_raw: &'a [(String, u32)]) -> Vec<StatsAppRow<'a>> {
@@ -2768,12 +2812,14 @@ impl AppState {
                     self.show_prayer_modal = false;
                     self.prayer_search_focused = false;
                     self.settings_scroll = 0.0;
+                    self.ensure_stats_icons();
                 }
                 self.sync_vinyl_timer();
                 self.request_redraw();
             }
             ControlId::BtnOpenShareCard => {
                 self.share_yesterday = self.stats_period == StatsPeriod::Yesterday;
+                self.ensure_stats_icons();
                 self.show_share_modal = true;
                 self.request_redraw();
             }
@@ -2883,6 +2929,7 @@ impl AppState {
             ControlId::BtnStatsPeriod(p) => {
                 self.stats_period = p;
                 self.settings_scroll = 0.0;
+                self.ensure_stats_icons();
                 self.request_redraw();
             }
             ControlId::BtnHeatmapPrev => {
