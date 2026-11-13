@@ -12,6 +12,7 @@ use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVE
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
 use windows::Win32::UI::Shell::{
     ExtractIconExW, SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON,
+    SHGFI_USEFILEATTRIBUTES,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DestroyIcon, EnumWindows, GetClassLongPtrW, GetWindowLongPtrW, GetWindowTextLengthW,
@@ -237,6 +238,18 @@ pub fn extract_app_icon_frame(hwnd_raw: isize, exe_path: &str) -> Option<Decoded
                 );
                 if res != 0 && !shfi.hIcon.0.is_null() {
                     owned_icon = Some(shfi.hIcon);
+                } else {
+                    let mut shfi_attr = SHFILEINFOW::default();
+                    let res_attr = SHGetFileInfoW(
+                        &wide,
+                        windows::Win32::Storage::FileSystem::FILE_ATTRIBUTE_NORMAL,
+                        Some(&mut shfi_attr),
+                        std::mem::size_of::<SHFILEINFOW>() as u32,
+                        SHGFI_ICON | SHGFI_LARGEICON | SHGFI_USEFILEATTRIBUTES,
+                    );
+                    if res_attr != 0 && !shfi_attr.hIcon.0.is_null() {
+                        owned_icon = Some(shfi_attr.hIcon);
+                    }
                 }
             }
         }

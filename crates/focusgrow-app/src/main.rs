@@ -47,8 +47,8 @@ use tray::{
 use updater::{AppUpdater, UpdateStatus, WM_APP_UPDATE};
 use ui::{
     blocked_apps_capacity, build_share_report_text, compute_layout, export_share_card_png,
-    period_app_breakdown, render_ui, AppFilter, AppSort, CityEntry, ControlId, GuardTab,
-    LayoutQuery, NumericEditField, RenderView, RunningAppView, SettingsTab, StatsAppRow,
+    period_app_breakdown, render_ui, AppFilter, AppSort, CityEntry, ControlId, DayPeriod, GuardTab,
+    LayoutQuery, NumericEditField, RectF, RenderView, RunningAppView, SettingsTab, StatsAppRow,
     StatsPeriod, ACCENT_PRESETS, CITY_PRESETS, COMMON_SITE_PRESETS, TIMER_THEMES,
 };
 use windows::core::{w, BOOL, PCWSTR};
@@ -311,9 +311,9 @@ impl AppState {
             .map(|frame| extract_album_accent(frame, self.config.use_complementary_color));
     }
 
-    fn ends_at_label(&self) -> String {
+    fn ends_at_label(&self) -> (String, DayPeriod) {
         let st = unsafe { GetLocalTime() };
-        compute_end_time_hhmm(
+        compute_end_time(
             st.wHour as u32,
             st.wMinute as u32,
             st.wSecond as u32,
@@ -1650,9 +1650,7 @@ impl AppState {
     }
 
     fn marquee_animating(&self) -> bool {
-        self.track.is_some()
-            && self.settings_tab.is_none()
-            && (self.config.pip_mode || self.timer.phase() != SessionPhase::Idle)
+        self.track.is_some() && self.settings_tab.is_none()
     }
 
     fn icon_spin_animating(&self) -> bool {
@@ -1898,7 +1896,7 @@ impl AppState {
     }
 
     fn render_now(&self) {
-        let ends_at = self.ends_at_label();
+        let (ends_at, ends_at_period) = self.ends_at_label();
         let (local_clock_text, local_date_text) = local_clock_and_date();
         let st = unsafe { GetLocalTime() };
         let today_date = format!("{:04}-{:02}-{:02}", st.wYear, st.wMonth, st.wDay);
@@ -1940,7 +1938,7 @@ impl AppState {
         };
         let stats_apps = self.build_stats_apps(&stats_raw);
 
-        self.with_render_view(&visible_apps, start, total_matching_apps, &stats_apps, &today_date, cur_hour, &ends_at, &local_clock_text, &local_date_text, active_exe, active_pass_count, bridge_port, |view| {
+        self.with_render_view(&visible_apps, start, total_matching_apps, &stats_apps, &today_date, cur_hour, &ends_at, ends_at_period, &local_clock_text, &local_date_text, active_exe, active_pass_count, bridge_port, |view| {
             if let Err(err) = self.surface.render(|dc, factory, dwrite, w, h| {
                 render_ui(dc, factory, dwrite, w, h, view)?;
                 Ok(())
@@ -1982,6 +1980,7 @@ impl AppState {
         today_date: &str,
         cur_hour: usize,
         ends_at: &str,
+        ends_at_period: DayPeriod,
         local_clock_text: &str,
         local_date_text: &str,
         active_exe: &str,
@@ -2016,6 +2015,7 @@ impl AppState {
             ytmpx_connected: self.ytmpx.as_ref().is_some_and(|b| b.is_connected()) || self.ytmpx_connected,
             effective_accent: self.effective_accent(),
             ends_at_text: ends_at,
+            ends_at_period,
             guard_tab: self.guard_tab,
             app_filter: self.app_filter,
             app_sort: self.app_sort,
@@ -2082,7 +2082,7 @@ impl AppState {
         let today_date = format!("{:04}-{:02}-{:02}", st.wYear, st.wMonth, st.wDay);
         let cur_hour = st.wHour as usize;
         let (local_clock_text, local_date_text) = local_clock_and_date();
-        let ends_at = self.ends_at_label();
+        let (ends_at, ends_at_period) = self.ends_at_label();
         let bridge_port = self.http_bridge.as_ref().map(|b| b.bound_port).unwrap_or(0);
         self.with_render_view(
             &[],
@@ -2092,6 +2092,7 @@ impl AppState {
             &today_date,
             cur_hour,
             &ends_at,
+            ends_at_period,
             &local_clock_text,
             &local_date_text,
             "",
@@ -2475,6 +2476,73 @@ impl AppState {
                     }
                 }
             }
+        }
+    }
+
+    fn handle_slider_wheel(&mut self, id: ControlId, delta: i16) -> bool {
+        let steps = delta as f32 / 120.0;
+        match id {
+            ControlId::OpacitySlider => {
+                let change = (steps * 5.0).round() as i32;
+                let next = (self.config.gif_opacity as i32 + change).clamp(15, 100) as u8;
+                if next != self.config.gif_opacity {
+                    self.config.gif_opacity = next;
+                    let _ = self.config.save();
+                    self.render_now();
+                }
+                true
+            }
+            ControlId::VinylSpeedSlider => {
+                let change = (steps * 1.0).round();
+                let next = (self.config.vinyl_speed_sec + change).clamp(1.0, 30.0);
+                if (next - self.config.vinyl_speed_sec).abs() > 0.05 {
+                    self.config.vinyl_speed_sec = next;
+                    let _ = self.config.save();
+                    self.sync_vinyl_overlay();
+                    self.render_now();
+                }
+                true
+            }
+            ControlId::VinylSizeSlider => {
+                let change = (steps * 20.0).round() as i32;
+                let next = (self.config.vinyl_size_px + change).clamp(120, 850);
+                if next != self.config.vinyl_size_px {
+                    self.config.vinyl_size_px = next;
+                    let _ = self.config.save();
+                    self.sync_vinyl_overlay();
+                    self.render_now();
+                }
+                true
+            }
+            ControlId::AmbientMasterSlider => {
+                let change = (steps * 5.0).round() as i32;
+                let next = (self.config.ambient.master_volume as i32 + change).clamp(0, 100) as u8;
+                if next != self.config.ambient.master_volume {
+                    self.config.ambient.master_volume = next;
+                    let _ = self.config.save();
+                    self.audio.sync(&self.config.ambient);
+                    self.render_now();
+                }
+                true
+            }
+            ControlId::AmbientTrackSlider(idx) => {
+                if let Some(meta) = AMBIENT_TRACKS.get(idx) {
+                    if let Some(tr) = self.config.ambient.track_mut(meta.id) {
+                        let change = (steps * 5.0).round() as i32;
+                        let next = (tr.volume as i32 + change).clamp(0, 100) as u8;
+                        if next != tr.volume {
+                            tr.volume = next;
+                            let slot = if self.config.ambient.active_preset == "custom_2" { 1 } else { 0 };
+                            self.config.ambient.save_current_as_custom(slot);
+                            let _ = self.config.save();
+                            self.audio.sync(&self.config.ambient);
+                            self.render_now();
+                        }
+                    }
+                }
+                true
+            }
+            _ => false,
         }
     }
 
@@ -3838,27 +3906,6 @@ impl AppState {
                     _ => {}
                 }
             }
-            ControlId::BtnSysMigrateWebView2 => {
-                let (today, y, m, d, _) = local_date_and_hour();
-                let yesterday = prev_date_str(y, m, d);
-                if auto_migrate_webview2(&today, &yesterday, &mut self.config, &mut self.stats).is_ok() {
-                    let _ = self.config.save();
-                    let _ = self.stats.save();
-                    self.guard.sync_from_config(&self.config);
-                    self.prayer_mgr = PrayerManager::new(
-                        self.config.prayer_lat,
-                        self.config.prayer_lng,
-                        self.config.prayer_tz,
-                    );
-                    self.sync_schedule_to_timer();
-                    self.load_active_gif();
-                    self.refresh_prayer_schedule();
-                    self.sync_bridge_snapshot();
-                    self.sync_vinyl_overlay();
-                    self.settings_tab = None;
-                    self.request_redraw();
-                }
-            }
             ControlId::GuardAppToggle(vis_idx) => {
                 let (_, h_dip) = self.surface.dip_size();
                 let cap = blocked_apps_capacity(h_dip);
@@ -4179,10 +4226,32 @@ fn infer_timezone_from_coords(lat: f64, lng: f64) -> i32 {
     }
 }
 
-fn compute_end_time_hhmm(hour: u32, minute: u32, second: u32, add_sec: u32) -> String {
+fn compute_end_time(hour: u32, minute: u32, second: u32, add_sec: u32) -> (String, DayPeriod) {
     let base_sec = hour * 3600 + minute * 60 + second;
-    let total_min = ((base_sec + add_sec) / 60) % (24 * 60);
-    format!("{:02}:{:02}", total_min / 60, total_min % 60)
+    let total_sec = base_sec + add_sec;
+    let total_days = total_sec / (24 * 3600);
+    let rem_sec = total_sec % (24 * 3600);
+    let end_hour = rem_sec / 3600;
+    let end_min = (rem_sec % 3600) / 60;
+    let is_next_day = total_days > 0;
+    let time_str = if is_next_day {
+        format!("{:02}:{:02} (+1d)", end_hour, end_min)
+    } else {
+        format!("{:02}:{:02}", end_hour, end_min)
+    };
+    let period = if (5..12).contains(&end_hour) {
+        DayPeriod::Morning
+    } else if (12..18).contains(&end_hour) {
+        DayPeriod::Afternoon
+    } else {
+        DayPeriod::Night
+    };
+    (time_str, period)
+}
+
+#[allow(dead_code)]
+fn compute_end_time_hhmm(hour: u32, minute: u32, second: u32, add_sec: u32) -> String {
+    compute_end_time(hour, minute, second, add_sec).0
 }
 
 fn clamp_window_pos_to_virtual_screen(x: i32, y: i32, w: i32, h: i32) -> (i32, i32) {
@@ -4953,6 +5022,42 @@ unsafe extern "system" fn wnd_proc(
                 let (w_dip, h_dip) = state.surface.dip_size();
                 let layout = compute_layout(&state.layout_query(w_dip, h_dip));
                 let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16;
+
+                // Priority 1: Check if cursor is hovering PRECISELY over a slider bar
+                let slider_target = layout.hit_rects.iter().rev().find_map(|h| {
+                    let is_slider = matches!(
+                        h.id,
+                        ControlId::OpacitySlider
+                            | ControlId::VinylSpeedSlider
+                            | ControlId::VinylSizeSlider
+                            | ControlId::AmbientMasterSlider
+                            | ControlId::AmbientTrackSlider(_)
+                    );
+                    if is_slider {
+                        // Strict check: only trigger when cursor is directly over the slider
+                        // with minimal vertical padding (+-2px) so it doesn't hijack page scrolling
+                        let slider_hit = RectF {
+                            x: h.rect.x - 2.0,
+                            y: h.rect.y - 2.0,
+                            w: h.rect.w + 4.0,
+                            h: h.rect.h + 4.0,
+                        };
+                        if slider_hit.contains(x, y) {
+                            Some(h.id)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                });
+
+                if let Some(target) = slider_target {
+                    if state.handle_slider_wheel(target, delta) {
+                        return LRESULT(0);
+                    }
+                }
+
                 if state.settings_tab.is_some() || state.show_ambient_mixer || state.show_stats_modal {
                     if layout.modal_body_rect.is_some_and(|r| r.contains(x, y))
                         && layout.settings_max_scroll > 0.0
@@ -5276,11 +5381,13 @@ fn copy_image_file_to_clipboard(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::compute_end_time_hhmm;
+    use super::{compute_end_time, DayPeriod};
 
     #[test]
     fn computes_wraparound_end_time_correctly() {
-        assert_eq!(compute_end_time_hhmm(14, 10, 0, 6 * 3600 + 55 * 60), "21:05");
-        assert_eq!(compute_end_time_hhmm(23, 30, 0, 45 * 60), "00:15");
+        assert_eq!(compute_end_time(14, 10, 0, 6 * 3600 + 55 * 60), ("21:05".to_string(), DayPeriod::Night));
+        assert_eq!(compute_end_time(23, 30, 0, 45 * 60), ("00:15 (+1d)".to_string(), DayPeriod::Night));
+        assert_eq!(compute_end_time(7, 0, 0, 2 * 3600), ("09:00".to_string(), DayPeriod::Morning));
+        assert_eq!(compute_end_time(12, 0, 0, 3 * 3600), ("15:00".to_string(), DayPeriod::Afternoon));
     }
 }

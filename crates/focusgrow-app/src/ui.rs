@@ -418,7 +418,6 @@ pub enum ControlId {
     BtnSysResetToday,
     BtnSysClearApps,
     BtnSysClearGifs,
-    BtnSysMigrateWebView2,
     BtnCheckUpdate,
     BtnGuardClearPasses,
 }
@@ -479,6 +478,13 @@ impl UiLayout {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DayPeriod {
+    Morning,   // 05:00 - 11:59
+    Afternoon, // 12:00 - 17:59
+    Night,     // 18:00 - 04:59
+}
+
 pub struct RenderView<'a> {
     pub config: &'a AppConfig,
     pub timer: &'a FocusTimer,
@@ -497,6 +503,7 @@ pub struct RenderView<'a> {
     pub ytmpx_connected: bool,
     pub effective_accent: &'a str,
     pub ends_at_text: &'a str,
+    pub ends_at_period: DayPeriod,
     pub guard_tab: GuardTab,
     pub app_filter: AppFilter,
     pub app_sort: AppSort,
@@ -629,6 +636,20 @@ fn compute_pip_capsule_layout(
             y: capsule_rect.y,
             w: drag_w,
             h: capsule_h,
+        },
+    });
+
+    // Stealth Mode toggle on timer digits in PiP capsule
+    let gif_s = if is_compact { 26.0 } else { 30.0 };
+    let timer_x = capsule_rect.x + 3.5 + gif_s + 4.0;
+    let timer_w = if is_compact { 40.0 } else { 48.0 };
+    hits.push(HitRect {
+        id: ControlId::BtnToggleStealthTimer,
+        rect: RectF {
+            x: timer_x,
+            y: capsule_rect.y + 4.0,
+            w: timer_w,
+            h: capsule_h - 8.0,
         },
     });
 
@@ -1449,7 +1470,7 @@ fn appearance_cards(body: RectF, config: &AppConfig, scroll: f32) -> AppearanceC
     let w = (body.w - 10.0).max(200.0);
     let x = body.x;
     let y1 = body.y - scroll;
-    let sec1_h = if config.timer_theme == "hourglass" { 224.0 } else { 184.0 };
+    let sec1_h = if config.timer_theme == "hourglass" { 266.0 } else { 226.0 };
     let sec1 = RectF { x, y: y1, w, h: sec1_h };
 
     let y2 = y1 + sec1_h + 12.0;
@@ -1554,6 +1575,8 @@ fn push_settings_tab_hits(
                 push_modal_hit(body, hits, ControlId::BtnToggleHourglassRotate, RectF { x: px, y, w: pw, h: 36.0 });
                 y += 40.0;
             }
+            push_modal_hit(body, hits, ControlId::BtnToggleStealthTimer, RectF { x: px, y, w: pw, h: 40.0 });
+            y += 42.0;
             push_modal_hit(body, hits, ControlId::BtnToggleStealthPeek, RectF { x: px, y, w: pw, h: 40.0 });
 
             // Card 2: Accent Color Palette (6 labeled swatches + Dynamic Sync + Complementary)
@@ -1730,7 +1753,6 @@ fn push_settings_tab_hits(
         SettingsTab::System => {
             let ids = [
                 ControlId::BtnCheckUpdate,
-                ControlId::BtnSysMigrateWebView2,
                 ControlId::BtnToggleMinimizeTray,
                 ControlId::BtnToggleLanguage,
                 ControlId::BtnSysResetToday,
@@ -2231,7 +2253,9 @@ fn render_pip_capsule_ui(
     }
 
     // 3. Timer Text & Phase Dot
-    let timer_str = if view.config.stealth_active && (view.hovered != Some(ControlId::BtnToggleStealthTimer) && !view.config.stealth_hover_peek) {
+    let peeking_stealth = view.config.stealth_hover_peek
+        && view.hovered == Some(ControlId::BtnToggleStealthTimer);
+    let timer_str = if view.config.stealth_active && !peeking_stealth {
         "••:••".to_string()
     } else {
         view.timer.formatted_time()
@@ -2593,6 +2617,7 @@ fn draw_left_focus_card(
 
         draw_neutral_segment_button(
             dc,
+            Some(factory),
             dwrite,
             find_hit(layout, ControlId::BtnModeFocus),
             "Productive Focus",
@@ -2602,6 +2627,7 @@ fn draw_left_focus_card(
         )?;
         draw_neutral_segment_button(
             dc,
+            Some(factory),
             dwrite,
             find_hit(layout, ControlId::BtnModeHealth),
             "Posture Guard",
@@ -2778,29 +2804,52 @@ fn draw_left_focus_card(
             rgba(208, 208, 218, 0.90),
             DWRITE_TEXT_ALIGNMENT_CENTER,
         )?;
-        // Measured centered pill: [Clock] Ends at HH:MM • Xh Ym total
+        // Measured centered pill: adaptive icon & colors based on finish time of day (Morning/Afternoon/Night)
         let end_y = sum_y + 33.0;
         let pre_str = "Ends at ";
         let mid_str = view.ends_at_text;
         let post_str = format!(" • {total_str} total");
         let w_pre = measure_text_width(dwrite, pre_str, 10.6, DWRITE_FONT_WEIGHT_NORMAL);
-        let w_mid = measure_text_width(dwrite, mid_str, 11.0, DWRITE_FONT_WEIGHT_BOLD);
+        let w_mid = measure_text_width(dwrite, mid_str, 10.6, DWRITE_FONT_WEIGHT_BOLD);
         let w_post = measure_text_width(dwrite, &post_str, 10.6, DWRITE_FONT_WEIGHT_NORMAL);
-        let clock_w = 15.0;
-        let total_content_w = clock_w + w_pre + w_mid + w_post;
+        let icon_w = 15.0;
+        let total_content_w = icon_w + w_pre + w_mid + w_post;
         let pill_w = (total_content_w + 26.0).clamp(170.0, lw);
+        let (icon, icon_col, pill_bg, pill_border, mid_col) = match view.ends_at_period {
+            DayPeriod::Morning => (
+                VectorIcon::Sunrise,
+                rgba(249, 115, 22, 0.98), // Sunrise Warm Coral/Amber #f97316
+                rgba(245, 158, 11, 0.12),
+                rgba(245, 158, 11, 0.32),
+                rgba(251, 191, 36, 0.98), // Golden Sunrise #fbbf24
+            ),
+            DayPeriod::Afternoon => (
+                VectorIcon::Sun,
+                rgba(234, 179, 8, 0.98), // Radiant Sun Gold #eab308
+                rgba(234, 179, 8, 0.12),
+                rgba(234, 179, 8, 0.32),
+                rgba(250, 204, 21, 0.98), // Vivid Sunshine Yellow #facc15
+            ),
+            DayPeriod::Night => (
+                VectorIcon::Moon,
+                rgba(192, 132, 252, 0.98), // Lavender/purple #c084fc
+                rgba(168, 85, 247, 0.14),
+                rgba(168, 85, 247, 0.35),
+                rgba(216, 180, 254, 0.98), // Soft violet #d8b4fe
+            ),
+        };
         let pill_r = RectF { x: lx + (lw - pill_w) * 0.5, y: end_y - 1.0, w: pill_w, h: 22.0 };
-        draw_rounded_card(dc, pill_r, 11.0, rgba(32, 32, 37, 0.84), rgba(255, 255, 255, 0.10), 1.0)?;
+        draw_rounded_card(dc, pill_r, 11.0, pill_bg, pill_border, 1.0)?;
 
         let mut cx_t = pill_r.x + (pill_r.w - total_content_w) * 0.5;
         draw_vector_icon(
             dc,
-            None,
-            RectF { x: cx_t - 1.0, y: pill_r.y + 4.0, w: 13.0, h: 13.0 },
-            VectorIcon::Clock,
-            rgba(185, 185, 198, 0.88),
+            Some(factory),
+            RectF { x: cx_t - 1.0, y: pill_r.y + 4.5, w: 13.0, h: 13.0 },
+            icon,
+            icon_col,
         )?;
-        cx_t += clock_w;
+        cx_t += icon_w;
         draw_text_nowrap(
             dc,
             dwrite,
@@ -2816,10 +2865,10 @@ fn draw_left_focus_card(
             dc,
             dwrite,
             mid_str,
-            RectF { x: cx_t, y: pill_r.y, w: w_mid + 2.0, h: pill_r.h },
-            11.0,
+            RectF { x: cx_t, y: pill_r.y - 0.8, w: w_mid + 2.0, h: pill_r.h },
+            10.6,
             DWRITE_FONT_WEIGHT_BOLD,
-            hex_color(view.effective_accent, 0.98),
+            mid_col,
             DWRITE_TEXT_ALIGNMENT_LEADING,
         )?;
         cx_t += w_mid;
@@ -3298,6 +3347,24 @@ fn draw_right_guard_card(
     Ok(())
 }
 
+fn app_monogram_color(exe_name: &str) -> (D2D1_COLOR_F, D2D1_COLOR_F) {
+    let mut hash: u32 = 5381;
+    for b in exe_name.bytes() {
+        hash = ((hash << 5).wrapping_add(hash)).wrapping_add(b.to_ascii_lowercase() as u32);
+    }
+    let palette = [
+        (rgba(16, 185, 129, 0.28), rgba(16, 185, 129, 0.75)), // Emerald Green
+        (rgba(59, 130, 246, 0.28), rgba(59, 130, 246, 0.75)), // Blue
+        (rgba(139, 92, 246, 0.28), rgba(139, 92, 246, 0.75)), // Violet
+        (rgba(245, 158, 11, 0.28), rgba(245, 158, 11, 0.75)), // Amber
+        (rgba(236, 72, 153, 0.28), rgba(236, 72, 153, 0.75)), // Pink
+        (rgba(6, 182, 212, 0.28), rgba(6, 182, 212, 0.75)),   // Cyan
+        (rgba(99, 102, 241, 0.28), rgba(99, 102, 241, 0.75)), // Indigo
+        (rgba(239, 68, 68, 0.28), rgba(239, 68, 68, 0.75)),   // Red
+    ];
+    palette[(hash as usize) % palette.len()]
+}
+
 fn draw_blocked_apps_tab(
     dc: &ID2D1DeviceContext,
     dwrite: &IDWriteFactory,
@@ -3423,16 +3490,17 @@ fn draw_blocked_apps_tab(
         };
         draw_rounded_card(dc, row_r, 8.0, bg, border, 1.0)?;
 
-        // Real extracted app HICON bitmap (or monogram fallback)
+        // Real extracted app HICON bitmap (or rich monogram avatar)
         let icon_r = RectF { x: row_r.x + 10.0, y: row_r.y + (row_r.h - 23.0) * 0.5, w: 23.0, h: 23.0 };
         if let Some(bmp) = app.icon {
             unsafe {
                 dc.DrawBitmap(bmp, Some(&icon_r.to_d2d()), 1.0, D2D1_INTERPOLATION_MODE_LINEAR, None, None);
             }
         } else {
-            draw_rounded_card(dc, icon_r, 6.0, rgba(58, 58, 68, 0.9), rgba(255, 255, 255, 0.1), 1.0)?;
-            let ch = app.exe_name.chars().next().unwrap_or('A').to_ascii_uppercase().to_string();
-            draw_text_nowrap(dc, dwrite, &ch, icon_r, 11.0, DWRITE_FONT_WEIGHT_BOLD, rgba(235, 235, 245, 0.9), DWRITE_TEXT_ALIGNMENT_CENTER)?;
+            let (tile_bg, tile_border) = app_monogram_color(app.exe_name);
+            draw_rounded_card(dc, icon_r, 6.0, tile_bg, tile_border, 1.0)?;
+            let ch = app.exe_name.chars().find(|c| c.is_alphanumeric()).unwrap_or('A').to_ascii_uppercase().to_string();
+            draw_text_nowrap(dc, dwrite, &ch, RectF { x: icon_r.x, y: icon_r.y - 0.5, w: icon_r.w, h: icon_r.h }, 11.0, DWRITE_FONT_WEIGHT_BOLD, rgba(255, 255, 255, 0.96), DWRITE_TEXT_ALIGNMENT_CENTER)?;
         }
 
         let tx = icon_r.x + 33.0;
@@ -4045,8 +4113,20 @@ fn draw_settings_appearance(
         dc,
         dwrite,
         RectF { x: p1x, y, w: p1w, h: 40.0 },
-        "Hover to Peek Timer (Stealth Mode)",
-        Some("Temporarily fade in hidden timer digits on mouse hover"),
+        "Stealth Mode (Click Timer to Toggle)",
+        Some("Hide countdown timer digits to avoid clock-watching anxiety"),
+        view.config.stealth_active,
+        view.hovered == Some(ControlId::BtnToggleStealthTimer),
+        view.effective_accent,
+    )?;
+    y += 42.0;
+    draw_dashed_divider(dc, p1x, y - 2.0, p1w)?;
+    draw_setting_inline_row(
+        dc,
+        dwrite,
+        RectF { x: p1x, y, w: p1w, h: 40.0 },
+        "Hover to Peek Digits",
+        Some("Temporarily fade in hidden countdown digits on mouse hover"),
         view.config.stealth_hover_peek,
         view.hovered == Some(ControlId::BtnToggleStealthPeek),
         view.effective_accent,
@@ -4751,8 +4831,9 @@ fn push_ambient_mixer_hits(body: RectF, scroll: f32, hits: &mut Vec<HitRect>) ->
         push_modal_hit(body, hits, ControlId::BtnCustomPreset(slot), ml.custom_rects[slot]);
     }
     for (i, card) in ml.track_cards.iter().enumerate() {
-        push_modal_hit(body, hits, ControlId::BtnAmbientTrackToggle(i), card.toggle);
         push_modal_hit(body, hits, ControlId::AmbientTrackSlider(i), card.slider);
+        push_modal_hit(body, hits, ControlId::AmbientTrackSlider(i), card.slider);
+        push_modal_hit(body, hits, ControlId::BtnAmbientTrackToggle(i), card.toggle);
     }
     push_modal_hit(body, hits, ControlId::BtnAmbientAutoPlay, ml.auto_play_row);
     (ml.total_h - body.h).max(0.0)
@@ -5253,18 +5334,6 @@ fn draw_settings_system(
     )?;
     y += 54.0;
 
-    draw_setting_card_row(
-        dc,
-        dwrite,
-        RectF { x: body.x, y, w, h: 48.0 },
-        "Migrate Data from WebView2",
-        "Import streak, focus history, blocked list & preferences from WebView2",
-        None,
-        Some(if view.config.webview2_migrated { "Re-Sync" } else { "Import" }),
-        view.hovered == Some(ControlId::BtnSysMigrateWebView2),
-        "#10B981",
-    )?;
-    y += 54.0;
     draw_setting_card_row(dc, dwrite, RectF { x: body.x, y, w, h: 48.0 }, "Minimize to System Tray on Close", "Keep FocusGrow running in background when closed", Some(view.config.minimize_to_tray), None, view.hovered == Some(ControlId::BtnToggleMinimizeTray), view.effective_accent)?;
     y += 54.0;
     let lang = if view.config.app_language.eq_ignore_ascii_case("id") { "Bahasa Indonesia" } else { "English" };
@@ -6732,14 +6801,27 @@ fn draw_stats_modal(
             let row_card = RectF { x: mc.x, y: row_y, w, h: 46.0 };
             draw_rounded_card(dc, row_card, 8.0, rgba(32, 32, 37, 0.94), rgba(255, 255, 255, 0.06), 1.0)?;
 
-            // App Icon (real extracted bitmap or fallback dot)
-            let ico_r = RectF { x: row_card.x + 12.0, y: row_card.y + 9.0, w: 16.0, h: 16.0 };
+            // App Icon (real extracted bitmap or colorful monogram avatar)
+            let ico_s = 20.0;
+            let ico_r = RectF { x: row_card.x + 12.0, y: row_card.y + 7.0, w: ico_s, h: ico_s };
             if let Some(bmp) = app.icon {
                 unsafe {
                     dc.DrawBitmap(bmp, Some(&ico_r.to_d2d()), 1.0, D2D1_INTERPOLATION_MODE_LINEAR, None, None);
                 }
             } else {
-                draw_rounded_card(dc, ico_r, 4.0, rgba(60, 62, 72, 0.9), rgba(255, 255, 255, 0.12), 0.5)?;
+                let (tile_bg, tile_border) = app_monogram_color(app.exe_name);
+                draw_rounded_card(dc, ico_r, 5.0, tile_bg, tile_border, 1.0)?;
+                let initial = app.exe_name.chars().find(|c| c.is_alphanumeric()).unwrap_or('A').to_ascii_uppercase().to_string();
+                draw_text_nowrap(
+                    dc,
+                    dwrite,
+                    &initial,
+                    RectF { x: ico_r.x, y: ico_r.y - 0.5, w: ico_r.w, h: ico_r.h },
+                    10.5,
+                    DWRITE_FONT_WEIGHT_BOLD,
+                    rgba(255, 255, 255, 0.96),
+                    DWRITE_TEXT_ALIGNMENT_CENTER,
+                )?;
             }
 
             let exe_w = measure_text_width(dwrite, app.exe_name, 11.2, DWRITE_FONT_WEIGHT_SEMI_BOLD).min(w - 300.0);
@@ -7983,6 +8065,8 @@ enum VectorIcon {
     Waves,
     PulseWave,
     Moon,
+    Sun,
+    Sunrise,
     Ban,
     Globe,
     Palette,
@@ -8090,12 +8174,49 @@ fn draw_vector_icon(
                 dc.FillEllipse(&D2D1_ELLIPSE { point: pt(cx, cy), radiusX: r3, radiusY: r3 }, &brush);
             }
             VectorIcon::Person => {
-                let hr = (r * 0.34).max(1.6);
-                dc.DrawEllipse(&D2D1_ELLIPSE { point: pt(cx, cy - r * 0.56), radiusX: hr, radiusY: hr }, &brush, 1.35, stroke_opt);
-                dc.DrawLine(pt(cx, cy - r * 0.18), pt(cx, cy + r * 0.48), &brush, 1.35, stroke_opt);
-                dc.DrawLine(pt(cx - r * 0.52, cy + r * 0.08), pt(cx + r * 0.52, cy + r * 0.08), &brush, 1.35, stroke_opt);
-                dc.DrawLine(pt(cx, cy + r * 0.48), pt(cx - r * 0.38, cy + r * 1.02), &brush, 1.35, stroke_opt);
-                dc.DrawLine(pt(cx, cy + r * 0.48), pt(cx + r * 0.38, cy + r * 1.02), &brush, 1.35, stroke_opt);
+                // Clean modern Posture / User silhouette: circle head with smooth rounded shoulder arc
+                let rad = (r * 1.05).max(4.6);
+                let head_r = rad * 0.44;
+                let head_cy = cy - rad * 0.44;
+                dc.DrawEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(cx, head_cy),
+                        radiusX: head_r,
+                        radiusY: head_r,
+                    },
+                    &brush,
+                    1.3,
+                    stroke_opt,
+                );
+                let sh_w = rad * 0.88;
+                let sh_h = rad * 0.72;
+                let sh_y = cy + rad * 0.90;
+                if let Some(fact) = factory {
+                    if let Ok(path) = fact.CreatePathGeometry() {
+                        if let Ok(sink) = path.Open() {
+                            sink.BeginFigure(pt(cx - sh_w, sh_y), D2D1_FIGURE_BEGIN_HOLLOW);
+                            sink.AddArc(&D2D1_ARC_SEGMENT {
+                                point: pt(cx + sh_w, sh_y),
+                                size: D2D_SIZE_F { width: sh_w, height: sh_h },
+                                rotationAngle: 0.0,
+                                sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+                                arcSize: D2D1_ARC_SIZE_SMALL,
+                            });
+                            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+                            let _ = sink.Close();
+                            dc.DrawGeometry(&path, &brush, 1.3, stroke_opt);
+                        }
+                    }
+                } else {
+                    // Fallback smooth shoulder arch if factory not provided
+                    let p0 = pt(cx - sh_w, sh_y);
+                    let p1 = pt(cx - sh_w * 0.45, cy + rad * 0.20);
+                    let p2 = pt(cx + sh_w * 0.45, cy + rad * 0.20);
+                    let p3 = pt(cx + sh_w, sh_y);
+                    dc.DrawLine(p0, p1, &brush, 1.3, stroke_opt);
+                    dc.DrawLine(p1, p2, &brush, 1.3, stroke_opt);
+                    dc.DrawLine(p2, p3, &brush, 1.3, stroke_opt);
+                }
             }
             VectorIcon::Clock => {
                 let rad = (r * 0.96).max(4.2);
@@ -8544,6 +8665,54 @@ fn draw_vector_icon(
                     dc.DrawEllipse(&D2D1_ELLIPSE { point: pt(cx, cy), radiusX: rm * 0.78, radiusY: rm * 0.78 }, &brush, 1.35, stroke_opt);
                 }
             }
+            VectorIcon::Sun => {
+                // Classic radiant Sun (distinct from gear: compact core with clean gap & cardinal/diagonal rays)
+                let r_core = (r * 0.33).max(1.8);
+                dc.DrawEllipse(&D2D1_ELLIPSE { point: pt(cx, cy), radiusX: r_core, radiusY: r_core }, &brush, 1.2, stroke_opt);
+                let r_in = r * 0.54;
+                for i in 0..8 {
+                    let angle = i as f32 * std::f32::consts::FRAC_PI_4;
+                    let r_out = if i % 2 == 0 { r * 0.98 } else { r * 0.84 };
+                    let cos = angle.cos();
+                    let sin = angle.sin();
+                    dc.DrawLine(
+                        pt(cx + r_in * cos, cy + r_in * sin),
+                        pt(cx + r_out * cos, cy + r_out * sin),
+                        &brush,
+                        1.15,
+                        stroke_opt,
+                    );
+                }
+            }
+            VectorIcon::Sunrise => {
+                // Morning sunrise: horizon baseline with rising sun dome and upward morning rays
+                let horiz_y = cy + r * 0.38;
+                dc.DrawLine(pt(cx - r * 0.92, horiz_y), pt(cx + r * 0.92, horiz_y), &brush, 1.25, stroke_opt);
+                let r_dome = (r * 0.42).max(2.4);
+                if let Some(fact) = factory {
+                    if let Ok(path) = fact.CreatePathGeometry() {
+                        if let Ok(sink) = path.Open() {
+                            sink.BeginFigure(pt(cx - r_dome, horiz_y), D2D1_FIGURE_BEGIN_HOLLOW);
+                            sink.AddArc(&D2D1_ARC_SEGMENT {
+                                point: pt(cx + r_dome, horiz_y),
+                                size: D2D_SIZE_F { width: r_dome, height: r_dome },
+                                rotationAngle: 0.0,
+                                sweepDirection: D2D1_SWEEP_DIRECTION_CLOCKWISE,
+                                arcSize: D2D1_ARC_SIZE_SMALL,
+                            });
+                            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+                            let _ = sink.Close();
+                            dc.DrawGeometry(&path, &brush, 1.25, stroke_opt);
+                        }
+                    }
+                } else {
+                    dc.DrawEllipse(&D2D1_ELLIPSE { point: pt(cx, horiz_y), radiusX: r_dome, radiusY: r_dome }, &brush, 1.25, stroke_opt);
+                }
+                // Radiating upward morning rays
+                dc.DrawLine(pt(cx, cy - r * 0.15), pt(cx, cy - r * 0.86), &brush, 1.2, stroke_opt);
+                dc.DrawLine(pt(cx - r * 0.36, cy + r * 0.02), pt(cx - r * 0.68, cy - r * 0.42), &brush, 1.2, stroke_opt);
+                dc.DrawLine(pt(cx + r * 0.36, cy + r * 0.02), pt(cx + r * 0.68, cy - r * 0.42), &brush, 1.2, stroke_opt);
+            }
             VectorIcon::Ban => {
                 let rad = (r * 0.92).max(4.0);
                 dc.DrawEllipse(&D2D1_ELLIPSE { point: pt(cx, cy), radiusX: rad, radiusY: rad }, &brush, 1.35, stroke_opt);
@@ -8949,6 +9118,7 @@ fn draw_rounded_card(
 
 fn draw_neutral_segment_button(
     dc: &ID2D1DeviceContext,
+    factory: Option<&ID2D1Factory1>,
     dwrite: &IDWriteFactory,
     rect_opt: Option<RectF>,
     label: &str,
@@ -8983,7 +9153,7 @@ fn draw_neutral_segment_button(
         let icon_w = 13.0;
         let gap = 5.0;
         let start_x = rect.x + ((rect.w - (icon_w + gap + tw)).max(6.0)) * 0.5;
-        draw_vector_icon(dc, None, RectF { x: start_x, y: rect.y + (rect.h - 13.0) * 0.5, w: 13.0, h: 13.0 }, ic, fg)?;
+        draw_vector_icon(dc, factory, RectF { x: start_x, y: rect.y + (rect.h - 13.0) * 0.5, w: 13.0, h: 13.0 }, ic, fg)?;
         draw_text_nowrap(
             dc,
             dwrite,
