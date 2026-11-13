@@ -89,7 +89,7 @@ dependencies = [
 
 [[package]]
 name = "focusgrow-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -105,7 +105,7 @@ dependencies = [
 
 [[package]]
 name = "focusgrow-audio"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "focusgrow-core",
@@ -115,7 +115,7 @@ dependencies = [
 
 [[package]]
 name = "focusgrow-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "focusgrow-gfx"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "windows",

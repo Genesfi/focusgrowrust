@@ -1,0 +1,6 @@
+{
+  "version": "1.0.0",
+  "installer_url": "https://github.com/Genesfi/focusgrowrust/releases/download/v1.0.0/FocusGrow_Setup_v1.0.0.exe",
+  "changelog": "Initial release with dual Spotify & YouTube Music vinyl sync, Inno Setup installer, and system tray support."
+}
+

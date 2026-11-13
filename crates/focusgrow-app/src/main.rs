@@ -11,6 +11,7 @@ mod tray;
 mod ui;
 mod ytmpx;
 mod smtc;
+mod updater;
 
 use anyhow::Result;
 use focusgrow_audio::{next_sound_style, AudioEngine, AMBIENT_PRESETS, AMBIENT_TRACKS};
@@ -43,6 +44,7 @@ use tray::{
     TrayIcon, IDM_TRAY_EXIT, IDM_TRAY_PAUSE, IDM_TRAY_RESTORE, IDM_TRAY_STOP,
     IDM_TRAY_TOGGLE_PIP, WM_TRAYICON,
 };
+use updater::{AppUpdater, UpdateStatus, WM_APP_UPDATE};
 use ui::{
     blocked_apps_capacity, build_share_report_text, compute_layout, export_share_card_png,
     period_app_breakdown, render_ui, AppFilter, AppSort, CityEntry, ControlId, GuardTab,
@@ -274,6 +276,7 @@ struct AppState {
     last_guard_tick: Instant,
     lan_ip: String,
     qr_matrix: Option<QrMatrix>,
+    updater: AppUpdater,
 }
 
 impl AppState {
@@ -1994,6 +1997,7 @@ impl AppState {
         let spin_now = Instant::now();
         let completed_spin_deg = Self::spin_deg_until(self.completed_spin_until, spin_now);
         let guard_refresh_spin_deg = Self::spin_deg_until(self.guard_refresh_spin_until, spin_now);
+        let update_status = self.updater.get_status();
         let view = RenderView {
             config: &self.config,
             timer: &self.timer,
@@ -2068,6 +2072,7 @@ impl AppState {
             is_auto_paused: self.is_auto_paused,
             completed_spin_deg,
             guard_refresh_spin_deg,
+            update_status: &update_status,
         };
         f(&view)
     }
@@ -3815,6 +3820,24 @@ impl AppState {
                 self.status_hint = Some("Cleaned GIF storage cache".to_string());
                 self.request_redraw();
             }
+            ControlId::BtnCheckUpdate => {
+                match self.updater.get_status() {
+                    UpdateStatus::Idle | UpdateStatus::UpToDate { .. } | UpdateStatus::Error(_) => {
+                        self.status_hint = Some("Checking GitHub for updates...".to_string());
+                        self.updater.check_for_updates();
+                        self.request_redraw();
+                    }
+                    UpdateStatus::Available { installer_url, latest, .. } => {
+                        self.status_hint = Some(format!("Downloading FocusGrow v{}...", latest));
+                        self.updater.start_download(installer_url, latest);
+                        self.request_redraw();
+                    }
+                    UpdateStatus::ReadyToInstall { installer_path, .. } => {
+                        AppUpdater::launch_installer(&installer_path);
+                    }
+                    _ => {}
+                }
+            }
             ControlId::BtnSysMigrateWebView2 => {
                 let (today, y, m, d, _) = local_date_and_hour();
                 let yesterday = prev_date_str(y, m, d);
@@ -4436,6 +4459,8 @@ fn run_app() -> Result<()> {
     let qr_matrix = encode_qr_v3_m(&format!("http://{lan_ip}:{bridge_port_init}"));
     let (gif_tx, gif_rx) = mpsc::channel();
     let (prayer_loc_tx, prayer_loc_rx) = mpsc::channel();
+    let updater = AppUpdater::new(hwnd);
+    updater.check_for_updates();
 
     let mut state = Box::new(AppState {
         hwnd,
@@ -4556,6 +4581,7 @@ fn run_app() -> Result<()> {
         last_guard_tick: Instant::now(),
         lan_ip,
         qr_matrix,
+        updater,
     });
 
     state.refresh_prayer_schedule();
@@ -4998,6 +5024,10 @@ unsafe extern "system" fn wnd_proc(
         }
         WM_PRAYER_LOC_EVENT => {
             state.handle_prayer_loc_events();
+            LRESULT(0)
+        }
+        WM_APP_UPDATE => {
+            state.request_redraw();
             LRESULT(0)
         }
         WM_VINYL_COMMAND => {

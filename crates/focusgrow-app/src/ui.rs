@@ -419,6 +419,7 @@ pub enum ControlId {
     BtnSysClearApps,
     BtnSysClearGifs,
     BtnSysMigrateWebView2,
+    BtnCheckUpdate,
     BtnGuardClearPasses,
 }
 
@@ -551,6 +552,7 @@ pub struct RenderView<'a> {
     pub is_auto_paused: bool,
     pub completed_spin_deg: f32,
     pub guard_refresh_spin_deg: f32,
+    pub update_status: &'a crate::updater::UpdateStatus,
 }
 
 pub struct LayoutQuery<'a> {
@@ -1727,6 +1729,7 @@ fn push_settings_tab_hits(
         }
         SettingsTab::System => {
             let ids = [
+                ControlId::BtnCheckUpdate,
                 ControlId::BtnSysMigrateWebView2,
                 ControlId::BtnToggleMinimizeTray,
                 ControlId::BtnToggleLanguage,
@@ -5190,6 +5193,66 @@ fn draw_settings_system(
 ) -> Result<()> {
     let w = (body.w - 10.0).max(200.0);
     let mut y = body.y - view.settings_scroll;
+
+    // Software Update Card Row
+    let (upd_title, upd_sub, upd_btn, upd_col) = match view.update_status {
+        crate::updater::UpdateStatus::Idle => (
+            format!("FocusGrow v{}", env!("CARGO_PKG_VERSION")),
+            "Click to check for the latest releases on GitHub".to_string(),
+            "Check Update",
+            view.effective_accent,
+        ),
+        crate::updater::UpdateStatus::Checking => (
+            format!("FocusGrow v{}", env!("CARGO_PKG_VERSION")),
+            "Checking for updates from GitHub...".to_string(),
+            "Checking...",
+            "#60A5FA",
+        ),
+        crate::updater::UpdateStatus::UpToDate { current } => (
+            format!("FocusGrow v{}", current),
+            "You are using the latest version of FocusGrow".to_string(),
+            "Up to Date",
+            "#10B981",
+        ),
+        crate::updater::UpdateStatus::Available { latest, changelog, .. } => (
+            format!("New Update Available: v{}", latest),
+            changelog.clone(),
+            "Download Update",
+            "#34D399",
+        ),
+        crate::updater::UpdateStatus::Downloading { latest } => (
+            format!("Downloading v{}...", latest),
+            "Downloading installer in background, please wait...".to_string(),
+            "Downloading...",
+            "#60A5FA",
+        ),
+        crate::updater::UpdateStatus::ReadyToInstall { latest, .. } => (
+            format!("Ready to Install v{}", latest),
+            "Installer downloaded. Click to install and restart FocusGrow".to_string(),
+            "Install & Restart",
+            "#10B981",
+        ),
+        crate::updater::UpdateStatus::Error(err) => (
+            format!("FocusGrow v{}", env!("CARGO_PKG_VERSION")),
+            err.clone(),
+            "Retry",
+            "#F87171",
+        ),
+    };
+
+    draw_setting_card_row(
+        dc,
+        dwrite,
+        RectF { x: body.x, y, w, h: 48.0 },
+        &upd_title,
+        &upd_sub,
+        None,
+        Some(upd_btn),
+        view.hovered == Some(ControlId::BtnCheckUpdate),
+        upd_col,
+    )?;
+    y += 54.0;
+
     draw_setting_card_row(
         dc,
         dwrite,
