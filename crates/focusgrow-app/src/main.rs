@@ -78,7 +78,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateIconIndirect, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     EnumWindows, FindWindowW, GetClientRect, GetForegroundWindow, GetMessageW, GetSystemMetrics,
-    GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindowVisible, KillTimer, LoadCursorW, LoadImageW, PostMessageW,
+    GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadImageW, PostMessageW,
     PostQuitMessage, RegisterClassExW, SendMessageW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA,
     GWL_EXSTYLE, HICON, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP,
@@ -1016,6 +1016,16 @@ impl AppState {
             self.dismissed_blocked_hwnd = None;
             return;
         };
+        let hwnd = HWND(info.hwnd_raw as *mut _);
+        let win_alive = unsafe { IsWindow(Some(hwnd)).as_bool() && IsWindowVisible(hwnd).as_bool() };
+        if !win_alive {
+            self.block_countdown = None;
+            self.blocked_app_active = None;
+            self.active_app = None;
+            self.dismissed_blocked_hwnd = None;
+            self.sync_sec_timer();
+            return;
+        }
         if self
             .guard
             .is_app_blacklisted(&info.exe_name, &info.title, &self.timer)
@@ -1070,6 +1080,10 @@ impl AppState {
             self.guard.active_exe = info.exe_name.clone();
             self.guard.active_title = info.title.clone();
             self.active_app = Some(info);
+        } else {
+            self.guard.active_exe.clear();
+            self.guard.active_title.clear();
+            self.active_app = None;
         }
         self.evaluate_foreground_guard();
         self.sync_overlays();
@@ -1267,11 +1281,16 @@ impl AppState {
         }
 
         // Fallback OS foreground polling so elevated launchers/games missed by SetWinEventHook
-        // are always detected within 1s.
+        // are always detected within 1s, or cleaned up when closed.
         let fg = unsafe { GetForegroundWindow() };
-        if !fg.0.is_null()
-            && !self.overlay.as_ref().is_some_and(|ov| ov.is_overlay_hwnd(fg))
-            && self.active_app.as_ref().map(|a| a.hwnd_raw) != Some(fg.0 as isize)
+        let active_dead = self.active_app.as_ref().is_some_and(|a| {
+            let hwnd = HWND(a.hwnd_raw as *mut _);
+            unsafe { !IsWindow(Some(hwnd)).as_bool() || !IsWindowVisible(hwnd).as_bool() }
+        });
+        if active_dead
+            || (!fg.0.is_null()
+                && !self.overlay.as_ref().is_some_and(|ov| ov.is_overlay_hwnd(fg))
+                && self.active_app.as_ref().map(|a| a.hwnd_raw) != Some(fg.0 as isize))
         {
             self.handle_foreground_event();
         }
@@ -1532,8 +1551,12 @@ impl AppState {
                         .map(|a| a.exe_name.clone())
                         .unwrap_or_else(|| "distracting app".to_string());
                     self.block_countdown = None;
-                    if closed {
+                    let hwnd = HWND(hwnd_raw as *mut _);
+                    let still_alive = unsafe { IsWindow(Some(hwnd)).as_bool() && IsWindowVisible(hwnd).as_bool() };
+                    if !still_alive || closed {
                         self.status_hint = Some(format!("Closed blocked app: {name}"));
+                        self.blocked_app_active = None;
+                        self.active_app = None;
                     } else {
                         self.blocked_app_active = Some(name.clone());
                         self.status_hint = Some(format!("Blocking overlay active for {name}"));
