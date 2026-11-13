@@ -26,7 +26,7 @@ use focusgrow_core::gif_store::{
 use focusgrow_core::{
     auto_migrate_webview2, AmbientMode, AppConfig, DailyStats, FocusTimer, GifDisplayMode,
     GuardState, NamedPrayer, NeutralOverstayEvent, NeutralOverstayTracker, PersistedSession,
-    PipStyle, PrayerManager, SessionPhase, VinylSide,
+    PipStyle, PrayerManager, SessionPhase, TickResult, VinylSide,
 };
 use focusgrow_gfx::{
     decode_image_bytes, decode_image_file_progressive, extract_album_accent, upload_frame_bitmap,
@@ -162,6 +162,14 @@ impl AudioSlot {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum PrayerResumeAction {
+    #[default]
+    None,
+    FreshFocus,
+    ResumeCurrent,
+}
+
 struct AppState {
     hwnd: HWND,
     surface: DCompSurface,
@@ -180,6 +188,7 @@ struct AppState {
     last_prayer_break_key: String,
     last_prayer_dismissed_key: String,
     last_prayer_adv_key: String,
+    prayer_resume_action: PrayerResumeAction,
     warned_5m_phase: Option<(SessionPhase, u32)>,
     warned_1m_phase: Option<(SessionPhase, u32)>,
     prev_phase: SessionPhase,
@@ -783,6 +792,50 @@ impl AppState {
         }
     }
 
+    fn on_prayer_break_ended(&mut self) {
+        let now = Instant::now();
+        match self.prayer_resume_action {
+            PrayerResumeAction::FreshFocus => {
+                self.timer.advance_to_next_focus_period(now);
+                self.persist_session_now();
+                self.status_hint = Some("Prayer completed. Started fresh focus period!".to_string());
+                if self.config.notifications_enabled {
+                    self.audio.play_notification(
+                        &self.config.focus_sound,
+                        self.config.custom_focus_audio_path.as_deref(),
+                    );
+                    self.notify_windows(
+                        "Prayer Break Completed",
+                        "Starting a fresh focus session now. Let's do great work!",
+                    );
+                }
+            }
+            PrayerResumeAction::ResumeCurrent => {
+                if self.timer.is_paused() {
+                    self.timer.toggle_pause(now);
+                }
+                self.persist_session_now();
+                self.status_hint = Some("Prayer completed. Resumed focus session.".to_string());
+                if self.config.notifications_enabled {
+                    self.audio.play_notification(
+                        &self.config.focus_sound,
+                        self.config.custom_focus_audio_path.as_deref(),
+                    );
+                    self.notify_windows(
+                        "Prayer Break Completed",
+                        "Welcome back! Resuming your focus session.",
+                    );
+                }
+            }
+            PrayerResumeAction::None => {}
+        }
+        self.prayer_resume_action = PrayerResumeAction::None;
+        self.sync_overlays();
+        self.sync_sec_timer();
+        self.sync_bridge_snapshot();
+        self.request_redraw();
+    }
+
     fn sync_overlays(&mut self) {
         let now = Instant::now();
         let phase = self.timer.phase();
@@ -821,14 +874,44 @@ impl AppState {
                                 self.config.custom_warning_audio_path.as_deref(),
                             );
                         }
+
+                        // Smart Prayer Transition:
+                        let cur_phase = self.timer.phase();
+                        if self.timer.is_running() {
+                            let rem = self.timer.remaining_sec();
+                            if cur_phase == SessionPhase::Resting {
+                                // Rest break is absorbed by the 15-minute prayer break.
+                                // After prayer break ends, start a fresh focus session!
+                                self.prayer_resume_action = PrayerResumeAction::FreshFocus;
+                            } else if cur_phase == SessionPhase::Focusing {
+                                if rem <= 10 * 60 {
+                                    // Awkward remaining focus <= 10 mins:
+                                    // Complete current period and start fresh focus after prayer!
+                                    self.prayer_resume_action = PrayerResumeAction::FreshFocus;
+                                } else {
+                                    // Substantial focus remaining (> 10 mins):
+                                    // Safe pause, resume current period after prayer.
+                                    self.prayer_resume_action = PrayerResumeAction::ResumeCurrent;
+                                }
+                            }
+                            if !self.timer.is_paused() {
+                                self.timer.toggle_pause(now);
+                            }
+                        }
                     }
                 }
             } else {
-                self.prayer_break_remaining = 0;
+                if self.prayer_break_remaining > 0 {
+                    self.prayer_break_remaining = 0;
+                    self.on_prayer_break_ended();
+                }
                 self.active_prayer_break_name.clear();
             }
         } else {
-            self.prayer_break_remaining = 0;
+            if self.prayer_break_remaining > 0 {
+                self.prayer_break_remaining = 0;
+                self.on_prayer_break_ended();
+            }
             self.active_prayer_break_name.clear();
         }
 
@@ -937,6 +1020,7 @@ impl AppState {
                     if self.prayer_break_remaining > 0 {
                         self.prayer_break_remaining = 0;
                         self.last_prayer_dismissed_key = self.last_prayer_break_key.clone();
+                        self.on_prayer_break_ended();
                     }
                     if self.blocked_app_active.take().is_some() {
                         self.dismissed_blocked_hwnd = self.active_app.as_ref().map(|a| a.hwnd_raw);
@@ -1150,6 +1234,9 @@ impl AppState {
         }
         if self.prayer_break_remaining > 0 {
             self.prayer_break_remaining = self.prayer_break_remaining.saturating_sub(1);
+            if self.prayer_break_remaining == 0 {
+                self.on_prayer_break_ended();
+            }
             changed = true;
         }
         if self.guard_tab == GuardTab::PrayerTimes && !self.config.pip_mode {
@@ -1313,7 +1400,14 @@ impl AppState {
         }
 
         let was_running = self.timer.is_running();
-        let res = self.timer.tick(now);
+        let res = if self.prayer_break_remaining > 0 {
+            TickResult {
+                changed: false,
+                phase_completed: None,
+            }
+        } else {
+            self.timer.tick(now)
+        };
         if let Some(completed_phase) = res.phase_completed {
             self.warned_5m_phase = None;
             self.warned_1m_phase = None;
@@ -1570,6 +1664,9 @@ impl AppState {
 
             if self.prayer_break_remaining > 0 {
                 self.prayer_break_remaining = self.prayer_break_remaining.saturating_sub(1);
+                if self.prayer_break_remaining == 0 {
+                    self.on_prayer_break_ended();
+                }
                 redraw = true;
             }
             if self.guard_tab == GuardTab::PrayerTimes && !self.config.pip_mode {
@@ -4107,6 +4204,17 @@ impl AppState {
             s.contains("spotify") || e.contains("spotify")
         }).unwrap_or(false);
 
+        // If YTMPX bridge is connected, send ToggleMusicWindow directly so Tauri YTM
+        // handles native minimize-to-tray and restore cleanly without leaving a taskbar ghost.
+        if !is_spotify {
+            if let Some(ref bridge) = self.ytmpx {
+                if bridge.is_connected() {
+                    bridge.send_command(MediaCommand::ToggleMusicWindow);
+                    return;
+                }
+            }
+        }
+
         if is_spotify {
             if let Some(hwnd) = find_spotify_window(self.track.as_ref().map(|t| t.title.as_str())) {
                 toggle_window_minimize_restore(hwnd);
@@ -4647,6 +4755,7 @@ fn run_app() -> Result<()> {
         last_prayer_break_key: String::new(),
         last_prayer_dismissed_key: String::new(),
         last_prayer_adv_key: String::new(),
+        prayer_resume_action: PrayerResumeAction::None,
         warned_5m_phase: None,
         warned_1m_phase: None,
         prev_phase: SessionPhase::Idle,

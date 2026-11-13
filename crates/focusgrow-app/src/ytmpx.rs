@@ -83,15 +83,49 @@ pub struct TrackInfo {
     pub exe_name: String,
 }
 
-impl TrackInfo {
-    pub fn ticker_text(&self) -> String {
-        if self.title.is_empty() {
+pub fn clean_sponsor_text(text: &str) -> String {
+    let lower = text.to_lowercase();
+    let ad_words = ["bersponsor", "sponsored", "promoted", "iklan", "ad"];
+
+    for word in &ad_words {
+        if lower.trim() == *word {
             return String::new();
         }
-        if self.artist.is_empty() {
-            self.title.clone()
+    }
+
+    let mut result = text.to_string();
+    for word in &ad_words {
+        let w_len = word.len();
+        if result.to_lowercase().starts_with(word) {
+            let rest = &result[w_len..];
+            result = rest
+                .trim_start_matches(|c: char| c == ' ' || c == '•' || c == '·' || c == '-' || c == '—' || c == ':' || c == '|')
+                .trim()
+                .to_string();
+        }
+        if result.to_lowercase().ends_with(word) {
+            let cut = result.len() - w_len;
+            let rest = &result[..cut];
+            result = rest
+                .trim_end_matches(|c: char| c == ' ' || c == '•' || c == '·' || c == '-' || c == '—' || c == ':' || c == '|')
+                .trim()
+                .to_string();
+        }
+    }
+    result
+}
+
+impl TrackInfo {
+    pub fn ticker_text(&self) -> String {
+        let clean_title = clean_sponsor_text(&self.title);
+        let clean_artist = clean_sponsor_text(&self.artist);
+        if clean_title.is_empty() {
+            return clean_artist;
+        }
+        if clean_artist.is_empty() {
+            clean_title
         } else {
-            format!("{} — {}", self.title, self.artist)
+            format!("{} — {}", clean_title, clean_artist)
         }
     }
 }
@@ -810,8 +844,8 @@ pub(crate) fn parse_ytmpx_message(json_text: &str) -> Option<ParsedWsMessage> {
 
             return Some(ParsedWsMessage::Track {
                 track: TrackInfo {
-                    title,
-                    artist,
+                    title: clean_sponsor_text(&title),
+                    artist: clean_sponsor_text(&artist),
                     art_url,
                     source,
                     exe_name: raw_exe,

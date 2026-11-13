@@ -38,9 +38,9 @@ use windows::Win32::Graphics::Imaging::{
 use windows::Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER};
 use windows::Win32::Graphics::DirectWrite::{
     IDWriteFactory, DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_MEDIUM, DWRITE_FONT_WEIGHT_NORMAL,
-    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER,
-    DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING,
-    DWRITE_TEXT_METRICS, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_LINE_SPACING_METHOD_UNIFORM, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+    DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS, DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows_numerics::{Matrix3x2, Vector2};
 
@@ -7992,6 +7992,15 @@ fn draw_marquee_text(
 
     let wide: Vec<u16> = text.encode_utf16().collect();
     let tl = unsafe { dwrite.CreateTextLayout(&wide, &fmt, 4096.0, rect.h.max(16.0)) }?;
+    // Lock uniform line spacing & baseline so mixed scripts (English, Japanese, CJK, symbols)
+    // never cause vertical jitter or jumping baselines across different tracks.
+    let _ = unsafe {
+        tl.SetLineSpacing(
+            DWRITE_LINE_SPACING_METHOD_UNIFORM,
+            size * 1.30,
+            size * 1.00,
+        )
+    };
     let mut metrics = DWRITE_TEXT_METRICS::default();
     unsafe {
         tl.GetMetrics(&mut metrics)?;

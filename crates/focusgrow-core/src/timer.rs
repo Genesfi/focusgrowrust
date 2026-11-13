@@ -365,6 +365,18 @@ impl FocusTimer {
         self.accum = Duration::ZERO;
     }
 
+    /// Advances directly to the next planned focus period (skipping rest break),
+    /// or completes the session if the current period is the final one.
+    /// Used by Smart Prayer Transition when a prayer break fulfills the rest requirement.
+    pub fn advance_to_next_focus_period(&mut self, now: Instant) {
+        if self.current_period < self.total_periods {
+            self.current_period += 1;
+            self.enter_focus_period(now);
+        } else {
+            self.stop();
+        }
+    }
+
     /// Re-anchors the monotonic tick baseline without altering `remaining_sec` (e.g. after deferred startup).
     pub fn refresh_tick_anchor(&mut self, now: Instant) {
         if self.is_running() {
@@ -532,5 +544,30 @@ mod tests {
         assert!(res.changed);
         assert!(!timer.is_paused());
         assert_eq!(timer.remaining_sec(), 25 * 60);
+    }
+
+    #[test]
+    fn advance_to_next_focus_period_skips_rest_and_resets_chunk_duration() {
+        let t0 = Instant::now();
+        let mut timer = FocusTimer::new(60, 25, 5, false); // 3 periods: 25m, 25m, 10m
+        timer.start(t0);
+        assert_eq!(timer.current_period(), 1);
+        assert_eq!(timer.phase(), SessionPhase::Focusing);
+
+        // Advance to next focus period (e.g. after prayer break)
+        timer.advance_to_next_focus_period(t0);
+        assert_eq!(timer.current_period(), 2);
+        assert_eq!(timer.phase(), SessionPhase::Focusing);
+        assert_eq!(timer.remaining_sec(), 25 * 60);
+
+        // Advance again to 3rd period
+        timer.advance_to_next_focus_period(t0);
+        assert_eq!(timer.current_period(), 3);
+        assert_eq!(timer.phase(), SessionPhase::Focusing);
+        assert_eq!(timer.remaining_sec(), 10 * 60);
+
+        // Advance past final period completes session
+        timer.advance_to_next_focus_period(t0);
+        assert_eq!(timer.phase(), SessionPhase::Idle);
     }
 }
