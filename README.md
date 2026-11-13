@@ -84,10 +84,12 @@
   <img src="docs/screenshots/website_cooldown_blocker.png" width="43%" alt="Website Cooldown Blocker" />
 </p>
 <p align="center">
-  <img src="docs/screenshots/fullscreen_break_overlay.png" width="90%" alt="Full-Screen Break Overlay" />
+  <img src="docs/screenshots/fullscreen_break_overlay.png" width="48%" alt="Full-Screen Break Overlay" />
+  &nbsp;
+  <img src="docs/screenshots/neutral_overstay_overlay.jpg" width="48%" alt="Neutral App Overstay Guard Overlay" />
 </p>
 <p align="center">
-  <i>Event-driven <code>SetWinEventHook</code> &amp; UI Automation distraction guard across single or all monitors, with 5-second close countdowns, emergency website passes, and multi-monitor rest/prayer locks.</i>
+  <i>Event-driven <code>SetWinEventHook</code> &amp; UI Automation distraction guard across single or all monitors, with 5-second close countdowns, neutral app overstay locks, emergency website passes, and multi-monitor rest/prayer locks.</i>
 </p>
 
 ---

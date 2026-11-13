@@ -767,6 +767,22 @@ impl AppState {
         }
     }
 
+    fn assert_pip_topmost_above_overlay(&self) {
+        if self.config.pip_mode && !self.hwnd.0.is_null() {
+            unsafe {
+                let _ = SetWindowPos(
+                    self.hwnd,
+                    Some(HWND_TOPMOST),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+        }
+    }
+
     fn sync_overlays(&mut self) {
         let now = Instant::now();
         let phase = self.timer.phase();
@@ -852,6 +868,7 @@ impl AppState {
 
         // 2. Fullscreen Overlay priority: PrayerBreak (in Productive Focus) > AutoCloseWarning > FocusBlock > RestBreak
         if let Some(ref mut ov) = self.overlay {
+            ov.set_pip_mode(self.config.pip_mode);
             if self.prayer_break_remaining > 0 && !self.config.is_health_mode {
                 let label = if !self.active_prayer_break_name.is_empty() {
                     self.active_prayer_break_name.as_str()
@@ -900,6 +917,10 @@ impl AppState {
             } else if ov.is_visible() {
                 ov.hide();
             }
+        }
+
+        if self.config.pip_mode && self.overlay.as_ref().is_some_and(|ov| ov.is_visible()) {
+            self.assert_pip_topmost_above_overlay();
         }
     }
 
@@ -1028,6 +1049,9 @@ impl AppState {
     fn handle_foreground_event(&mut self) {
         let fg = unsafe { GetForegroundWindow() };
         if self.overlay.as_ref().is_some_and(|ov| ov.is_overlay_hwnd(fg)) {
+            if self.config.pip_mode {
+                self.assert_pip_topmost_above_overlay();
+            }
             return;
         }
         if let Some(info) = inspect_window(fg) {
@@ -1225,9 +1249,13 @@ impl AppState {
 
     fn on_second_tick(&mut self) {
         if let Some(ref mut ov) = self.overlay {
+            ov.set_pip_mode(self.config.pip_mode);
             if ov.is_visible() && !self.config.block_all_monitors {
                 ov.tick_follow_active_monitor();
             }
+        }
+        if self.config.pip_mode && self.overlay.as_ref().is_some_and(|ov| ov.is_visible()) {
+            self.assert_pip_topmost_above_overlay();
         }
         let now = Instant::now();
         let st = unsafe { GetLocalTime() };

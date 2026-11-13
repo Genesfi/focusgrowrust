@@ -26,9 +26,10 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetForegroundWindow,
     GetWindowLongPtrW, IsWindow, LoadCursorW, PostMessageW, RegisterClassW, SetForegroundWindow,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, CREATESTRUCTW, GWLP_USERDATA, HWND_TOPMOST,
-    IDC_ARROW, SC_CLOSE, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_SHOWWINDOW, SW_HIDE, WM_APP,
-    WM_CLOSE, WM_KEYDOWN, WM_LBUTTONUP, WM_NCCREATE, WM_PAINT, WM_SYSCOMMAND, WNDCLASSW,
-    WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    IDC_ARROW, SC_CLOSE, SET_WINDOW_POS_FLAGS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    SW_HIDE, WM_ACTIVATE, WM_APP, WM_CLOSE, WM_KEYDOWN, WM_LBUTTONUP, WM_NCCREATE, WM_PAINT,
+    WM_SETFOCUS, WM_SYSCOMMAND, WNDCLASSW, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_POPUP,
 };
 
 /// Posted to `main_hwnd` when the user grants an emergency pass or dismisses the fullscreen overlay.
@@ -150,6 +151,7 @@ enum OverlayButtonId {
 
 struct OverlayShared {
     main_hwnd: isize,
+    pip_mode: bool,
     snapshot: OverlaySnapshot,
     actions: VecDeque<OverlayAction>,
     quote_seed: usize,
@@ -168,6 +170,7 @@ struct OverlayPane {
 pub struct OverlayWindow {
     main_hwnd: HWND,
     block_all_monitors: bool,
+    pub pip_mode: bool,
     panes: Vec<Box<OverlayPane>>,
     shared: Arc<Mutex<OverlayShared>>,
     last_fg_hwnd: isize,
@@ -194,6 +197,7 @@ impl OverlayWindow {
             .unwrap_or(1);
         let shared = Arc::new(Mutex::new(OverlayShared {
             main_hwnd: main_hwnd.0 as isize,
+            pip_mode: false,
             snapshot: OverlaySnapshot::default(),
             actions: VecDeque::new(),
             quote_seed: nanos ^ (main_hwnd.0 as usize),
@@ -207,11 +211,29 @@ impl OverlayWindow {
         Ok(Self {
             main_hwnd,
             block_all_monitors,
+            pip_mode: false,
             panes: Vec::new(),
             shared,
             last_fg_hwnd: 0,
             last_cursor_pt: pt,
         })
+    }
+
+    pub fn set_pip_mode(&mut self, pip: bool) {
+        self.pip_mode = pip;
+        if let Ok(mut g) = self.shared.lock() {
+            g.pip_mode = pip;
+        }
+        if pip && !self.main_hwnd.0.is_null() {
+            unsafe {
+                let _ = SetWindowPos(
+                    self.main_hwnd,
+                    Some(HWND_TOPMOST),
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+        }
     }
 
     pub fn set_block_all_monitors(&mut self, block_all: bool) {
@@ -379,6 +401,17 @@ impl OverlayWindow {
         pane.dpi = new_dpi;
         pane.rect_px = rc;
         pane.render_now();
+
+        if self.pip_mode && !self.main_hwnd.0.is_null() {
+            unsafe {
+                let _ = SetWindowPos(
+                    self.main_hwnd,
+                    Some(HWND_TOPMOST),
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
+            }
+        }
     }
 
     fn detect_target_monitors(&mut self) -> Vec<RECT> {
@@ -501,6 +534,17 @@ impl OverlayWindow {
                 }
                 pane.render_now();
                 self.panes.push(pane);
+            }
+        }
+
+        if self.pip_mode && !self.main_hwnd.0.is_null() {
+            unsafe {
+                let _ = SetWindowPos(
+                    self.main_hwnd,
+                    Some(HWND_TOPMOST),
+                    0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
             }
         }
     }
@@ -1023,6 +1067,23 @@ unsafe extern "system" fn overlay_wnd_proc(
     if !ptr.is_null() {
         let pane = &*ptr;
         match msg {
+            WM_ACTIVATE | WM_SETFOCUS => {
+                if let Ok(g) = pane.shared.lock() {
+                    if g.pip_mode && g.main_hwnd != 0 {
+                        unsafe {
+                            let _ = SetWindowPos(
+                                HWND(g.main_hwnd as *mut _),
+                                Some(HWND_TOPMOST),
+                                0,
+                                0,
+                                0,
+                                0,
+                                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                            );
+                        }
+                    }
+                }
+            }
             WM_PAINT => {
                 let _ = windows::Win32::Graphics::Gdi::ValidateRect(Some(hwnd), None);
                 pane.render_now();
