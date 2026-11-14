@@ -37,6 +37,32 @@ const BROWSER_WHITELIST: &[&str] = &[
     "whale.exe",
 ];
 
+/// Compares an incoming domain against a restricted pattern (e.g. "x.com", "youtube.com").
+///
+/// Matches:
+/// - Exact matches (e.g. "x.com" == "x.com", "www.x.com" == "x.com")
+/// - Subdomains (e.g. "mobile.x.com" or "sub.x.com")
+///
+/// Does NOT match:
+/// - Partial substring names (e.g. "netflix.com" must NEVER match "x.com", "dropbox.com" must NOT match "box.com")
+/// - Exempted services (e.g. "music.youtube.com" is never blocked by "youtube.com")
+pub fn domain_matches(domain: &str, pattern: &str) -> bool {
+    let d = domain.trim().to_ascii_lowercase();
+    let p = pattern.trim().to_ascii_lowercase();
+    if d.is_empty() || p.is_empty() {
+        return false;
+    }
+    // YouTube Music exemption: music.youtube.com is an audio productivity app, NEVER treat as youtube.com
+    if (d == "music.youtube.com" || d.ends_with(".music.youtube.com"))
+        && (p == "youtube.com" || p == "www.youtube.com")
+    {
+        return false;
+    }
+    let d_clean = d.strip_prefix("www.").unwrap_or(&d);
+    let p_clean = p.strip_prefix("www.").unwrap_or(&p);
+    d_clean == p_clean || d_clean.ends_with(&format!(".{p_clean}"))
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RestrictedSiteState {
     pub domain: String,
@@ -129,7 +155,7 @@ impl GuardState {
         }
         let secs = minutes.clamp(1, 30) * 60;
         for site in &mut self.restricted_sites {
-            if low == site.domain || low.ends_with(&format!(".{}", site.domain)) || low.contains(&site.domain) {
+            if domain_matches(&low, &site.domain) {
                 if site.used_passes_this_session >= site.max_passes_per_session {
                     return false;
                 }
@@ -147,9 +173,7 @@ impl GuardState {
         }
         let low = domain_or_title.trim().to_ascii_lowercase();
         for site in &self.restricted_sites {
-            let matches = low == site.domain
-                || low.ends_with(&format!(".{}", site.domain))
-                || low.contains(&site.domain);
+            let matches = domain_matches(&low, &site.domain);
             if matches && site.pass_remaining_sec == 0 {
                 return Some(site);
             }
@@ -396,6 +420,21 @@ impl NeutralOverstayTracker {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    #[test]
+    fn domain_matching_does_not_false_positive_on_substrings() {
+        assert!(!domain_matches("netflix.com", "x.com"));
+        assert!(!domain_matches("www.netflix.com", "x.com"));
+        assert!(!domain_matches("dropbox.com", "box.com"));
+        assert!(!domain_matches("music.youtube.com", "youtube.com"));
+
+        assert!(domain_matches("x.com", "x.com"));
+        assert!(domain_matches("www.x.com", "x.com"));
+        assert!(domain_matches("mobile.x.com", "x.com"));
+        assert!(domain_matches("youtube.com", "youtube.com"));
+        assert!(domain_matches("www.youtube.com", "youtube.com"));
+        assert!(domain_matches("m.youtube.com", "youtube.com"));
+    }
 
     #[test]
     fn domain_blocking_respects_focus_phase_and_temporary_pass() {

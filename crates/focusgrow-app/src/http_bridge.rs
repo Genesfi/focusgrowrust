@@ -1,3 +1,4 @@
+use focusgrow_core::domain_matches;
 use serde::Deserialize;
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -233,12 +234,12 @@ fn evaluate_domain_status(shared: &BridgeShared, domain: &str) -> (&'static str,
     }
     let low = domain.trim().to_ascii_lowercase();
     for (pass_dom, rem) in &shared.active_pass_domains {
-        if *rem > 0 && (low == *pass_dom || low.ends_with(&format!(".{pass_dom}"))) {
+        if *rem > 0 && domain_matches(&low, pass_dom) {
             return ("ok", *rem);
         }
     }
     for restricted in &shared.restricted_domains {
-        if low == *restricted || low.ends_with(&format!(".{restricted}")) || low.contains(restricted) {
+        if domain_matches(&low, restricted) {
             return ("blocked", 0);
         }
     }
@@ -335,6 +336,13 @@ mod tests {
 
         shared.active_pass_domains.push(("youtube.com".to_string(), 240));
         assert_eq!(evaluate_domain_status(&shared, "youtube.com"), ("ok", 240));
+
+        // Regression test: netflix.com must never be blocked by x.com substring match
+        shared.restricted_domains.push("x.com".to_string());
+        assert_eq!(evaluate_domain_status(&shared, "netflix.com"), ("ok", 0));
+        assert_eq!(evaluate_domain_status(&shared, "www.netflix.com"), ("ok", 0));
+        assert_eq!(evaluate_domain_status(&shared, "x.com"), ("blocked", 0));
+        assert_eq!(evaluate_domain_status(&shared, "mobile.x.com"), ("blocked", 0));
     }
 }
 
