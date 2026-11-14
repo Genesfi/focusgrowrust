@@ -94,6 +94,7 @@ pub enum OverlayMode {
     FocusBlock,
     RestBreak,
     PrayerBreak,
+    PrayerCountdown,
     AutoCloseWarning,
     #[allow(dead_code)]
     NeutralOverstayBlock,
@@ -314,7 +315,7 @@ impl OverlayWindow {
             return;
         }
 
-        let timer_text = if mode == OverlayMode::AutoCloseWarning {
+        let timer_text = if mode == OverlayMode::AutoCloseWarning || mode == OverlayMode::PrayerCountdown {
             format!("{secs_remaining}s")
         } else {
             format!("{:02}:{:02}", secs_remaining / 60, secs_remaining % 60)
@@ -696,7 +697,7 @@ fn pick_quote(mode: OverlayMode, seed: usize) -> &'static str {
 
 fn pick_quote_avoiding(mode: OverlayMode, seed: usize, previous: &str) -> &'static str {
     let list = match mode {
-        OverlayMode::RestBreak | OverlayMode::PrayerBreak => REST_QUOTES,
+        OverlayMode::RestBreak | OverlayMode::PrayerBreak | OverlayMode::PrayerCountdown => REST_QUOTES,
         _ => FOCUS_QUOTES,
     };
     let idx = (seed ^ (seed >> 16)) % list.len();
@@ -768,6 +769,16 @@ fn draw_overlay(
             rgba(167, 243, 208, 0.96),
             "WAKTUNYA SHOLAT & ISTIRAHAT".to_string(),
             "Mari sejenak menghadap Sang Pencipta. Tinggalkan pekerjaanmu sementara waktu.\nLayar akan kembali terbuka setelah waktu istirahat sholat selesai.".to_string(),
+        ),
+        OverlayMode::PrayerCountdown => (
+            rgba(10, 32, 25, 0.88),
+            "#FBBF24",
+            rgba(254, 243, 199, 0.96),
+            format!("PERSIAPAN SHOLAT {}", snap.target_label.to_uppercase()),
+            format!(
+                "Waktu {} akan segera tiba dalam {}.\nSiapkan diri Anda untuk berwudhu dan beristirahat sejenak.",
+                snap.target_label, snap.timer_text
+            ),
         ),
         OverlayMode::AutoCloseWarning => (
             rgba(20, 20, 22, 0.945),
@@ -1183,5 +1194,18 @@ mod tests {
             passes_available: 0,
         };
         assert!(overlay_buttons_layout(1920.0, 1080.0, &snap).is_empty());
+    }
+
+    #[test]
+    fn prayer_countdown_has_no_dismiss_buttons_and_picks_rest_quote() {
+        let snap = OverlaySnapshot {
+            mode: OverlayMode::PrayerCountdown,
+            timer_text: "5s".to_string(),
+            target_label: "Maghrib".to_string(),
+            quote: pick_quote(OverlayMode::PrayerCountdown, 2).to_string(),
+            passes_available: 0,
+        };
+        assert!(overlay_buttons_layout(1920.0, 1080.0, &snap).is_empty());
+        assert!(REST_QUOTES.contains(&snap.quote.as_str()));
     }
 }

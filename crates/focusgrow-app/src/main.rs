@@ -482,9 +482,15 @@ impl AppState {
     }
 
     fn sync_sec_timer(&mut self) {
+        let prayer_approaching = self.config.prayer_enabled
+            && self.config.prayer_break_enabled
+            && self.prayer_break_remaining == 0
+            && (1..=10).contains(&self.next_prayer_secs);
+
         let should_run = self.timer.is_running()
             || self.block_countdown.is_some()
-            || self.prayer_break_remaining > 0;
+            || self.prayer_break_remaining > 0
+            || prayer_approaching;
         if should_run == self.sec_timer_active {
             return;
         }
@@ -972,6 +978,14 @@ impl AppState {
                     "Prayer"
                 };
                 ov.show(OverlayMode::PrayerBreak, self.prayer_break_remaining, label, 0);
+            } else if self.config.prayer_enabled
+                && self.config.prayer_break_enabled
+                && self.prayer_break_remaining == 0
+                && (1..=5).contains(&self.next_prayer_secs)
+                && !self.next_prayer_name.is_empty()
+                && !self.config.is_health_mode
+            {
+                ov.show(OverlayMode::PrayerCountdown, self.next_prayer_secs, &self.next_prayer_name, 0);
             } else if let Some((_, rem)) = self.block_countdown {
                 let app_label = self
                     .active_app
@@ -1710,6 +1724,19 @@ impl AppState {
                         );
                     }
                 }
+            }
+
+            // 5-second countdown chime & visual update before Prayer Break
+            if self.config.prayer_enabled
+                && self.config.prayer_break_enabled
+                && self.prayer_break_remaining == 0
+                && (1..=5).contains(&self.next_prayer_secs)
+                && !self.next_prayer_name.is_empty()
+            {
+                if self.config.countdown_sound_enabled {
+                    self.audio.play_countdown_pip(self.next_prayer_secs as u8);
+                }
+                redraw = true;
             }
         }
         if sec_step || redraw {
