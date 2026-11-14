@@ -12,7 +12,7 @@ use windows::Win32::Media::Audio::{
     AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL, COINIT_MULTITHREADED,
 };
 
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 0x0003;
@@ -83,6 +83,14 @@ fn try_stream_session(shared: &Arc<Mutex<SharedAudioState>>, stop: &Arc<AtomicBo
         let device = enumerator.GetDefaultAudioEndpoint(eRender, eConsole)?;
         let client: IAudioClient = device.Activate(CLSCTX_ALL, None)?;
 
+        let active_id: String = if let Ok(pwstr) = device.GetId() {
+            let s = pwstr.to_string().unwrap_or_default();
+            CoTaskMemFree(Some(pwstr.0 as *const _));
+            s
+        } else {
+            String::new()
+        };
+
         let wfx = WAVEFORMATEX {
             wFormatTag: WAVE_FORMAT_IEEE_FLOAT,
             nChannels: 2,
@@ -107,8 +115,22 @@ fn try_stream_session(shared: &Arc<Mutex<SharedAudioState>>, stop: &Arc<AtomicBo
         client.Start()?;
 
         let mut scratch = vec![0.0f32; (buffer_frames as usize) * 2];
+        let mut last_dev_check = std::time::Instant::now();
 
         while !stop.load(Ordering::Relaxed) {
+            if last_dev_check.elapsed() >= Duration::from_millis(600) {
+                last_dev_check = std::time::Instant::now();
+                if let Ok(cur_dev) = enumerator.GetDefaultAudioEndpoint(eRender, eConsole) {
+                    if let Ok(pwstr) = cur_dev.GetId() {
+                        let cur_id = pwstr.to_string().unwrap_or_default();
+                        CoTaskMemFree(Some(pwstr.0 as *const _));
+                        if !cur_id.is_empty() && !active_id.is_empty() && cur_id != active_id {
+                            // Default audio device changed! Reconnect stream seamlessly.
+                            break;
+                        }
+                    }
+                }
+            }
             let padding = client.GetCurrentPadding()?;
             let avail = buffer_frames.saturating_sub(padding);
             if avail == 0 {

@@ -60,8 +60,9 @@ use windows::Win32::Foundation::{
 use windows::Win32::System::Threading::CreateMutexW;
 use windows::Win32::Graphics::Direct2D::ID2D1Bitmap1;
 use windows::Win32::Graphics::Gdi::{
-    CreateBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, InvalidateRect, ScreenToClient,
-    BITMAPINFO, BITMAPINFOHEADER, BI_RGB, CreateDIBSection, DIB_RGB_COLORS,
+    CombineRgn, CreateBitmap, CreateCompatibleDC, CreateRoundRectRgn, DeleteDC, DeleteObject,
+    InvalidateRect, ScreenToClient, SetWindowRgn, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+    CreateDIBSection, DIB_RGB_COLORS, RGN_OR,
 };
 use windows::Win32::System::Com::{
     CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED, COINIT_MULTITHREADED,
@@ -81,7 +82,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadImageW, PostMessageW,
     PostQuitMessage, RegisterClassExW, SendMessageW, SetForegroundWindow, SetTimer,
     SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA,
-    GWL_EXSTYLE, HICON, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP,
+    GWL_EXSTYLE, HICON, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTNOWHERE, HTRIGHT, HTTOP,
     HTTOPLEFT, HTTOPRIGHT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, ICONINFO, ICON_BIG, ICON_SMALL,
     IDC_ARROW, IMAGE_ICON, LR_DEFAULTSIZE, MINMAXINFO, MSG, SC_MOVE, SM_CXSCREEN,
     SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -2362,6 +2363,11 @@ impl AppState {
                         }
                     }
 
+                    let track_presence_changed = prev_title.is_empty() != next_title.is_empty();
+                    if track_presence_changed && self.config.pip_mode && self.config.pip_style == PipStyle::Capsule {
+                        self.apply_pip_geometry();
+                    }
+
                     let playback_changed = self.playback != playback;
                     self.playback = playback;
                     need_redraw = !same_track || playback_changed;
@@ -2373,6 +2379,7 @@ impl AppState {
                         let playback_changed = self.playback != playback;
                         self.playback = playback;
                         if playback == PlaybackState::Stopped {
+                            let was_some = self.track.is_some();
                             self.track = None;
                             self.cover_frame = None;
                             self.cover_bitmap = None;
@@ -2380,6 +2387,9 @@ impl AppState {
                             self.cached_dynamic_accent = None;
                             if let Some(ref mut v) = self.peeking_vinyl {
                                 v.set_cover_frame(None, false);
+                            }
+                            if was_some && self.config.pip_mode && self.config.pip_style == PipStyle::Capsule {
+                                self.apply_pip_geometry();
                             }
                         }
                         need_redraw = playback_changed;
@@ -2494,7 +2504,8 @@ impl AppState {
                 self.dip_to_px(self.config.pip_width.max(180))
             };
             let target_h = if self.config.pip_style == PipStyle::Capsule {
-                self.dip_to_px(self.config.pip_capsule_height.max(68))
+                let cap_h = if self.track.is_some() { 68 } else { 42 };
+                self.dip_to_px(cap_h)
             } else {
                 self.dip_to_px(self.config.pip_height.max(220))
             };
@@ -2582,7 +2593,8 @@ impl AppState {
             self.dip_to_px(self.config.pip_width.max(180))
         };
         let target_h = if self.config.pip_style == PipStyle::Capsule {
-            self.dip_to_px(self.config.pip_capsule_height.max(68))
+            let cap_h = if self.track.is_some() { 68 } else { 42 };
+            self.dip_to_px(cap_h)
         } else {
             self.dip_to_px(self.config.pip_height.max(220))
         };
@@ -2604,6 +2616,61 @@ impl AppState {
             );
         }
         let _ = self.surface.resize(target_w as u32, target_h as u32, self.surface.dpi);
+        self.sync_capsule_region();
+    }
+
+    fn sync_capsule_region(&self) {
+        if !self.config.pip_mode || self.config.pip_style != PipStyle::Capsule {
+            unsafe {
+                let _ = SetWindowRgn(self.hwnd, None, true);
+            }
+            return;
+        }
+        let (w_dip, h_dip) = self.surface.dip_size();
+        let scale = self.surface.dpi / 96.0;
+        let pad_px = (2.0 * scale).round() as i32;
+        let cap_w_px = ((w_dip - 4.0) * scale).round() as i32;
+        let cap_h_px = (38.0 * scale).round() as i32;
+        let radius_px = cap_h_px.max(1);
+
+        unsafe {
+            let cap_rgn = CreateRoundRectRgn(
+                pad_px,
+                pad_px,
+                pad_px + cap_w_px,
+                pad_px + cap_h_px,
+                radius_px,
+                radius_px,
+            );
+            if self.track.is_some() && h_dip >= 60.0 {
+                let under_w_dip = if (w_dip - 4.0) < 235.0 {
+                    124.0f32.min(w_dip - 10.0).max(60.0)
+                } else {
+                    136.0f32.min(w_dip - 16.0).max(60.0)
+                };
+                let under_w_px = (under_w_dip * scale).round() as i32;
+                let under_x_px = pad_px + (cap_w_px - under_w_px) / 2;
+                let under_y_px = pad_px + cap_h_px + (3.0 * scale).round() as i32;
+                let under_h_px = (24.0 * scale).round() as i32;
+                let under_rad = under_h_px.max(1);
+
+                let under_rgn = CreateRoundRectRgn(
+                    under_x_px,
+                    under_y_px,
+                    under_x_px + under_w_px,
+                    under_y_px + under_h_px,
+                    under_rad,
+                    under_rad,
+                );
+                let combined = CreateRoundRectRgn(0, 0, 0, 0, 0, 0);
+                CombineRgn(Some(combined), Some(cap_rgn), Some(under_rgn), RGN_OR);
+                let _ = DeleteObject(cap_rgn.into());
+                let _ = DeleteObject(under_rgn.into());
+                let _ = SetWindowRgn(self.hwnd, Some(combined), true);
+            } else {
+                let _ = SetWindowRgn(self.hwnd, Some(cap_rgn), true);
+            }
+        }
     }
 
     fn apply_window_chrome(&self) {
@@ -4981,6 +5048,7 @@ unsafe extern "system" fn wnd_proc(
             if let Some(ref mut vinyl) = state.peeking_vinyl {
                 vinyl.sync_bounds_and_zorder(false);
             }
+            state.sync_capsule_region();
             DefWindowProcW(hwnd, msg, wparam, lparam)
         }
         WM_DPICHANGED => {
@@ -5001,6 +5069,7 @@ unsafe extern "system" fn wnd_proc(
                 new_dpi,
             );
             state.render_now();
+            state.sync_capsule_region();
             if let Some(ref mut vinyl) = state.peeking_vinyl {
                 vinyl.sync_bounds_and_zorder(false);
             }
@@ -5010,10 +5079,11 @@ unsafe extern "system" fn wnd_proc(
             let mmi = &mut *(lparam.0 as *mut MINMAXINFO);
             if state.config.pip_mode {
                 if state.config.pip_style == PipStyle::Capsule {
+                    let cap_h = if state.track.is_some() { 68 } else { 42 };
                     mmi.ptMinTrackSize.x = state.dip_to_px(195);
-                    mmi.ptMinTrackSize.y = state.dip_to_px(68);
+                    mmi.ptMinTrackSize.y = state.dip_to_px(cap_h);
                     mmi.ptMaxTrackSize.x = state.dip_to_px(520);
-                    mmi.ptMaxTrackSize.y = state.dip_to_px(68);
+                    mmi.ptMaxTrackSize.y = state.dip_to_px(cap_h);
                 } else {
                     mmi.ptMinTrackSize.x = state.dip_to_px(150);
                     mmi.ptMinTrackSize.y = state.dip_to_px(210);
@@ -5035,23 +5105,25 @@ unsafe extern "system" fn wnd_proc(
             // In Capsule mode: allow horizontal resizing from borders, native dragging from body, and clicking buttons
             if state.config.pip_mode && state.config.pip_style == PipStyle::Capsule {
                 let border = state.dip_to_px(7).max(5);
-                if sx < rc.left + border {
-                    return LRESULT(HTLEFT as isize);
-                }
-                if sx >= rc.right - border {
-                    return LRESULT(HTRIGHT as isize);
-                }
-
                 let x_dip = state.px_to_dip(sx - rc.left);
                 let y_dip = state.px_to_dip(sy - rc.top);
                 let (w_dip, h_dip) = state.surface.dip_size();
                 let layout = compute_layout(&state.layout_query(w_dip, h_dip));
                 if let Some(hit) = layout.hit_test(x_dip, y_dip) {
-                    if hit != ControlId::DragBar {
-                        return LRESULT(HTCLIENT as isize);
+                    if hit == ControlId::DragBar {
+                        return LRESULT(HTCAPTION as isize);
+                    }
+                    return LRESULT(HTCLIENT as isize);
+                }
+                if y_dip <= 42.0 {
+                    if sx < rc.left + border {
+                        return LRESULT(HTLEFT as isize);
+                    }
+                    if sx >= rc.right - border {
+                        return LRESULT(HTRIGHT as isize);
                     }
                 }
-                return LRESULT(HTCAPTION as isize);
+                return LRESULT(HTNOWHERE as isize);
             }
 
             let border = state.dip_to_px(9).max(7);
