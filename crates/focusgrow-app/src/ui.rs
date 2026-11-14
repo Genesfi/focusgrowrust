@@ -2146,14 +2146,6 @@ fn render_pip_capsule_ui(
             let opacity = (view.config.pip_capsule_album_opacity as f32 / 100.0).clamp(0.05, 1.0);
             let cx = capsule.x + capsule.w * 0.5;
             let cy = capsule.y + capsule.h * 0.5;
-            let diag = (capsule.w * capsule.w + capsule.h * capsule.h).sqrt().max(capsule.w);
-            let art_s = diag * 1.08;
-            let art_rect = RectF {
-                x: cx - art_s * 0.5,
-                y: cy - art_s * 0.5,
-                w: art_s,
-                h: art_s,
-            };
 
             let geo = unsafe {
                 factory.CreateRoundedRectangleGeometry(&D2D1_ROUNDED_RECT {
@@ -2177,7 +2169,29 @@ fn render_pip_capsule_ui(
                     dc.PushLayer(&params, None);
                 }
 
+                let bmp_size = unsafe { cover.GetSize() };
                 if view.config.pip_capsule_album_spin {
+                    let diag = (capsule.w * capsule.w + capsule.h * capsule.h).sqrt().max(capsule.w);
+                    let art_s = diag * 1.08;
+                    let art_rect = RectF {
+                        x: cx - art_s * 0.5,
+                        y: cy - art_s * 0.5,
+                        w: art_s,
+                        h: art_s,
+                    };
+
+                    // For spinning vinyl disc: take a 1:1 center-crop so non-square artwork
+                    // (such as 16:9 YouTube video thumbnails) is never squished horizontally into the rotating disc.
+                    let min_dim = bmp_size.width.min(bmp_size.height).max(1.0);
+                    let src_x = (bmp_size.width - min_dim) * 0.5;
+                    let src_y = (bmp_size.height - min_dim) * 0.5;
+                    let src_rect = D2D_RECT_F {
+                        left: src_x,
+                        top: src_y,
+                        right: src_x + min_dim,
+                        bottom: src_y + min_dim,
+                    };
+
                     let angle = view.in_card_vinyl_angle;
                     let mut prev = Matrix3x2::identity();
                     unsafe {
@@ -2188,22 +2202,14 @@ fn render_pip_capsule_ui(
                             Some(&art_rect.to_d2d()),
                             opacity,
                             D2D1_INTERPOLATION_MODE_LINEAR,
-                            None,
+                            Some(&src_rect),
                             None,
                         );
                         dc.SetTransform(&prev);
                     }
                 } else {
-                    unsafe {
-                        dc.DrawBitmap(
-                            cover,
-                            Some(&art_rect.to_d2d()),
-                            opacity,
-                            D2D1_INTERPOLATION_MODE_LINEAR,
-                            None,
-                            None,
-                        );
-                    }
+                    // Static background: cover-fit preserving original aspect ratio (16:9 YouTube widescreen or 1:1 album)
+                    draw_bitmap_cover_fit(dc, cover, capsule, opacity);
                 }
 
                 // Soft dark wash so text, timer, and avatar remain crisp
@@ -5640,6 +5646,22 @@ fn draw_focus_ring(
         "dots" => {
             draw_dots_ring(dc, cx, cy, r, stroke_w, arc_ratio, ring_color)?;
         }
+        "orbit" => {
+            let is_running = view.timer.phase() != SessionPhase::Idle && view.timer.is_running();
+            draw_orbit_ring(
+                dc,
+                factory,
+                cx,
+                cy,
+                r,
+                arc_ratio,
+                ring_color,
+                view.effective_accent,
+                view.wave_phase,
+                is_running,
+                is_pip,
+            )?;
+        }
         _ => {
             let track_alpha = if is_pip && has_full_media { 0.14 } else { 0.16 };
             let track_brush = unsafe { dc.CreateSolidColorBrush(&rgba(255, 255, 255, track_alpha), None) }?;
@@ -7817,6 +7839,125 @@ fn draw_dots_ring(
             );
         }
     }
+    Ok(())
+}
+
+fn draw_orbit_ring(
+    dc: &ID2D1DeviceContext,
+    factory: &ID2D1Factory1,
+    cx: f32,
+    cy: f32,
+    r: f32,
+    ratio: f32,
+    color: D2D1_COLOR_F,
+    accent: &str,
+    wave_phase: f32,
+    is_running: bool,
+    is_pip: bool,
+) -> Result<()> {
+    let orbit_w = if is_pip { 2.2 } else { 3.2 };
+
+    // 1. Thin celestial orbit background track
+    let track_brush = unsafe { dc.CreateSolidColorBrush(&rgba(255, 255, 255, 0.13), None) }?;
+    unsafe {
+        dc.DrawEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(cx, cy),
+                radiusX: r,
+                radiusY: r,
+            },
+            &track_brush,
+            orbit_w,
+            None,
+        );
+    }
+
+    // 2. Faint concentric orbital guide ring
+    let guide_r = (r - orbit_w * 2.2).max(10.0);
+    let guide_brush = unsafe { dc.CreateSolidColorBrush(&rgba(255, 255, 255, 0.05), None) }?;
+    unsafe {
+        dc.DrawEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(cx, cy),
+                radiusX: guide_r,
+                radiusY: guide_r,
+            },
+            &guide_brush,
+            0.8,
+            None,
+        );
+    }
+
+    // 3. Four subtle astronomical node markers at 12, 3, 6, 9 o'clock
+    let node_brush = unsafe { dc.CreateSolidColorBrush(&rgba(255, 255, 255, 0.22), None) }?;
+    let node_r = if is_pip { 1.2 } else { 1.6 };
+    unsafe {
+        for k in 0..4 {
+            let a = -std::f32::consts::FRAC_PI_2 + (k as f32) * std::f32::consts::FRAC_PI_2;
+            dc.FillEllipse(
+                &D2D1_ELLIPSE {
+                    point: pt(cx + r * a.cos(), cy + r * a.sin()),
+                    radiusX: node_r,
+                    radiusY: node_r,
+                },
+                &node_brush,
+            );
+        }
+    }
+
+    // 4. Progress Arc
+    draw_progress_arc(dc, factory, cx, cy, r, orbit_w, ratio, color)?;
+
+    // 5. Glowing Orbiting Planet / Particle
+    let angle = if is_running {
+        let clamped = ratio.clamp(0.0, 1.0);
+        -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * clamped
+    } else {
+        if ratio >= 0.999 {
+            -std::f32::consts::FRAC_PI_2 + (wave_phase * 0.35).sin() * 0.15
+        } else {
+            -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * ratio.clamp(0.0, 1.0)
+        }
+    };
+
+    let px = cx + r * angle.cos();
+    let py = cy + r * angle.sin();
+
+    // Multi-layer particle glow
+    let glow_outer_r = if is_pip { 6.0 } else { 8.8 };
+    let glow_outer_b = unsafe { dc.CreateSolidColorBrush(&hex_color(accent, 0.28), None) }?;
+    let glow_inner_r = if is_pip { 3.8 } else { 5.6 };
+    let glow_inner_b = unsafe { dc.CreateSolidColorBrush(&hex_color(accent, 0.70), None) }?;
+    let core_r = if is_pip { 2.2 } else { 3.4 };
+    let core_b = unsafe { dc.CreateSolidColorBrush(&rgba(255, 255, 255, 0.98), None) }?;
+
+    unsafe {
+        dc.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(px, py),
+                radiusX: glow_outer_r,
+                radiusY: glow_outer_r,
+            },
+            &glow_outer_b,
+        );
+        dc.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(px, py),
+                radiusX: glow_inner_r,
+                radiusY: glow_inner_r,
+            },
+            &glow_inner_b,
+        );
+        dc.FillEllipse(
+            &D2D1_ELLIPSE {
+                point: pt(px, py),
+                radiusX: core_r,
+                radiusY: core_r,
+            },
+            &core_b,
+        );
+    }
+
     Ok(())
 }
 

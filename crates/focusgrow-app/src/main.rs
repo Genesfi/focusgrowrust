@@ -1820,7 +1820,9 @@ impl AppState {
 
     fn wave_or_hourglass_animating(&self) -> bool {
         self.timer.is_running()
-            && (self.config.timer_theme == "wave" || self.config.timer_theme == "hourglass")
+            && (self.config.timer_theme == "wave"
+                || self.config.timer_theme == "hourglass"
+                || self.config.timer_theme == "orbit")
     }
 
     fn marquee_animating(&self) -> bool {
