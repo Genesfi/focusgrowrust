@@ -234,18 +234,13 @@ fn run_ws_loop(
     cmd_rx: mpsc::Receiver<MediaCommand>,
     cover_tx: mpsc::Sender<String>,
 ) {
-    // 1. Try to start as native embedded WebSocket server on :8765
-    match TcpListener::bind("127.0.0.1:8765") {
-        Ok(listener) => {
-            run_server_loop(listener, hwnd_raw, stop, connected, updates, cmd_rx, cover_tx);
-        }
-        Err(_) => {
-            // Port already bound by another process / existing server, fallback to client mode
-            run_client_loop(hwnd_raw, stop, connected, updates, cmd_rx, cover_tx);
-        }
-    }
+    // FocusGrow operates as a native WebSocket client connecting to Tauri YouTube Music on ws://127.0.0.1:8765.
+    // By being a client, FocusGrow never blocks or steals port 8765 from Tauri YTM,
+    // allowing Tauri YTM, FocusGrow, and DynamicNotification to coexist without port collisions.
+    run_client_loop(hwnd_raw, stop, connected, updates, cmd_rx, cover_tx);
 }
 
+#[allow(dead_code)]
 fn run_server_loop(
     listener: TcpListener,
     hwnd_raw: isize,

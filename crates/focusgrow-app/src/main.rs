@@ -57,7 +57,7 @@ use windows::Win32::Foundation::{
     CloseHandle, GetLastError, ERROR_ALREADY_EXISTS, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT,
     POINT, RECT, WPARAM,
 };
-use windows::Win32::System::Threading::CreateMutexW;
+use windows::Win32::System::Threading::{AttachThreadInput, CreateMutexW, GetCurrentThreadId};
 use windows::Win32::Graphics::Direct2D::ID2D1Bitmap1;
 use windows::Win32::Graphics::Gdi::{
     CombineRgn, CreateBitmap, CreateCompatibleDC, CreateRoundRectRgn, DeleteDC, DeleteObject,
@@ -74,15 +74,16 @@ use windows::Win32::UI::HiDpi::{
     GetDpiForWindow, SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+    ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateIconIndirect, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    EnumWindows, FindWindowW, GetClientRect, GetForegroundWindow, GetMessageW, GetSystemMetrics,
-    GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadImageW, PostMessageW,
+    BringWindowToTop, CreateIconIndirect, CreateWindowExW, DefWindowProcW,
+    DestroyWindow, DispatchMessageW, EnumWindows, FindWindowW, GetClientRect, GetForegroundWindow,
+    GetMessageW, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId,
+    IsIconic, IsWindow, IsWindowVisible, KillTimer, LoadCursorW, LoadImageW, PostMessageW,
     PostQuitMessage, RegisterClassExW, SendMessageW, SetForegroundWindow, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, CREATESTRUCTW, GWLP_USERDATA,
-    GWL_EXSTYLE, HICON, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTNOWHERE, HTRIGHT, HTTOP,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, SwitchToThisWindow, TranslateMessage,
+    CREATESTRUCTW, GWLP_USERDATA, GWL_EXSTYLE, HICON, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTNOWHERE, HTRIGHT, HTTOP,
     HTTOPLEFT, HTTOPRIGHT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, ICONINFO, ICON_BIG, ICON_SMALL,
     IDC_ARROW, IMAGE_ICON, LR_DEFAULTSIZE, MINMAXINFO, MSG, SC_MOVE, SM_CXSCREEN,
     SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
@@ -4319,7 +4320,14 @@ impl AppState {
             s.contains("spotify") || e.contains("spotify")
         }).unwrap_or(false);
 
-        // If YTMPX bridge is connected, send ToggleMusicWindow directly so Tauri YTM
+        let is_ytm = self.track.as_ref().map(|t| {
+            let s = t.source.to_lowercase();
+            let e = t.exe_name.to_lowercase();
+            s.contains("tauri") || s.contains("ytm") || s.contains("youtube music")
+                || e.contains("tauri") || e.contains("ytm") || e.contains("youtube music")
+        }).unwrap_or(false);
+
+        // 1. If YTMPX bridge is connected, send ToggleMusicWindow directly so Tauri YTM
         // handles native minimize-to-tray and restore cleanly without leaving a taskbar ghost.
         if !is_spotify {
             if let Some(ref bridge) = self.ytmpx {
@@ -4330,23 +4338,24 @@ impl AppState {
             }
         }
 
-        if is_spotify {
-            if let Some(hwnd) = find_spotify_window(self.track.as_ref().map(|t| t.title.as_str())) {
-                toggle_window_minimize_restore(hwnd);
+        // 2. Direct matching for YouTube Music Tauri desktop app window
+        if !is_spotify {
+            if let Some(hwnd) = find_ytm_window() {
+                bring_or_toggle_media_window(hwnd);
                 return;
             }
-        } else {
-            if let Some(hwnd) = find_ytm_window() {
-                toggle_window_minimize_restore(hwnd);
+            // If track is explicitly from Tauri/YTM desktop app, NEVER mistakenly focus a random browser window!
+            if is_ytm {
                 return;
             }
         }
 
-        // Fallback: If prioritized player window was not found, check the other
-        if let Some(hwnd) = find_ytm_window() {
-            toggle_window_minimize_restore(hwnd);
-        } else if let Some(hwnd) = find_spotify_window(self.track.as_ref().map(|t| t.title.as_str())) {
-            toggle_window_minimize_restore(hwnd);
+        // 3. Spotify (Desktop / Web Player)
+        if is_spotify {
+            if let Some(hwnd) = find_spotify_window(self.track.as_ref().map(|t| t.title.as_str())) {
+                bring_or_toggle_media_window(hwnd);
+                return;
+            }
         }
     }
 }
@@ -4354,19 +4363,44 @@ impl AppState {
 // ==========================================
 // WINDOW MINIMIZE / RESTORE HELPERS
 // ==========================================
-fn toggle_window_minimize_restore(hwnd: HWND) {
+fn bring_or_toggle_media_window(hwnd: HWND) {
     unsafe {
+        let fg = GetForegroundWindow();
+        if fg == hwnd {
+            // If already the foreground active window, minimize it!
+            let _ = ShowWindow(hwnd, SW_MINIMIZE);
+            return;
+        }
+
+        // Restore if minimized, or show if hidden
         if IsIconic(hwnd).as_bool() {
             let _ = ShowWindow(hwnd, SW_RESTORE);
-            let _ = SetForegroundWindow(hwnd);
         } else {
-            let _ = ShowWindow(hwnd, SW_MINIMIZE);
+            let _ = ShowWindow(hwnd, SW_SHOW);
         }
+
+        let cur_thread = GetCurrentThreadId();
+        let fg_thread = GetWindowThreadProcessId(fg, None);
+
+        // Win32 Foreground lock bypass trick using AttachThreadInput
+        if fg_thread != 0 && fg_thread != cur_thread {
+            let _ = AttachThreadInput(cur_thread, fg_thread, true);
+            let _ = BringWindowToTop(hwnd);
+            let _ = SetForegroundWindow(hwnd);
+            let _ = SetFocus(Some(hwnd));
+            let _ = AttachThreadInput(cur_thread, fg_thread, false);
+        } else {
+            let _ = BringWindowToTop(hwnd);
+            let _ = SetForegroundWindow(hwnd);
+            let _ = SetFocus(Some(hwnd));
+        }
+
+        SwitchToThisWindow(hwnd, true);
     }
 }
 
 // ==========================================
-// 1. YTM (TAURI DESKTOP / PWA / BROWSER) TOGGLE LOGIC
+// 1. YTM (TAURI DESKTOP / PWA) TOGGLE LOGIC
 // ==========================================
 fn find_ytm_window() -> Option<HWND> {
     let mut found: Option<HWND> = None;
@@ -4380,25 +4414,44 @@ fn find_ytm_window() -> Option<HWND> {
 }
 
 unsafe extern "system" fn enum_find_ytm_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    if !IsWindowVisible(hwnd).as_bool() && !IsIconic(hwnd).as_bool() {
+    if !IsWindow(Some(hwnd)).as_bool() {
         return BOOL(1);
     }
-    let mut rc = RECT::default();
-    let _ = GetWindowRect(hwnd, &mut rc);
-    if !IsIconic(hwnd).as_bool() && ((rc.right - rc.left) < 200 || (rc.bottom - rc.top) < 150) {
-        return BOOL(1);
-    }
+
     if let Some(info) = inspect_window(hwnd) {
         let title = info.title.to_lowercase();
         let exe = info.exe_name.to_lowercase();
+
+        // Never match web browsers when hunting for dedicated Tauri / YTM desktop window!
+        let is_browser = exe.contains("chrome")
+            || exe.contains("msedge")
+            || exe.contains("brave")
+            || exe.contains("firefox")
+            || exe.contains("opera")
+            || exe.contains("vivaldi");
+        if is_browser {
+            return BOOL(1);
+        }
+
         // Ignore generic YouTube videos/podcasts explicitly
         if title.contains(" - youtube") && !title.contains("youtube music") {
             return BOOL(1);
         }
-        if title.contains("youtube music") || exe.contains("youtube music") || exe.contains("ytm") || exe.contains("tauri") {
-            let out = &mut *(lparam.0 as *mut Option<HWND>);
-            *out = Some(hwnd);
-            return BOOL(0);
+
+        let is_match = exe.contains("tauri")
+            || exe.contains("youtube music")
+            || exe.contains("ytm")
+            || title.contains("youtube music");
+
+        if is_match {
+            let is_ico = IsIconic(hwnd).as_bool();
+            let mut rc = RECT::default();
+            let _ = GetWindowRect(hwnd, &mut rc);
+            if is_ico || ((rc.right - rc.left) > 150 && (rc.bottom - rc.top) > 100) {
+                let out = &mut *(lparam.0 as *mut Option<HWND>);
+                *out = Some(hwnd);
+                return BOOL(0);
+            }
         }
     }
     BOOL(1)
